@@ -1,6 +1,6 @@
 # Glow App
 
-Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web).
+Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web) PWA.
 
 Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA in a native shell with:
 - **Native passkey PRF** — biometric authentication via ASAuthorization (iOS) and CredentialManager (Android), since WebAuthn is unavailable in WebViews
