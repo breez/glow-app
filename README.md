@@ -1,6 +1,6 @@
 # Glow App
 
-Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web) — a Bitcoin/Lightning wallet powered by the Breez Spark SDK.
+Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web).
 
 Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA in a native shell with:
 - **Native passkey PRF** — biometric authentication via ASAuthorization (iOS) and CredentialManager (Android), since WebAuthn is unavailable in WebViews
