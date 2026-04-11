@@ -1,0 +1,3 @@
+[submodule "glow-web"]
+	path = glow-web
+	url = https://github.com/breez/glow-web.git
