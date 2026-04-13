@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'technology.breez.glow',
+  appId: 'com.breez.spark.glow',
   appName: 'Glow',
   webDir: 'glow-web/dist',
   server: {

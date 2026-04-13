@@ -14,7 +14,8 @@
     "@capacitor/android": "^8.3.0",
     "@capacitor/cli": "^8.3.0",
     "@capacitor/core": "^8.3.0",
-    "@capacitor/ios": "^8.3.0"
+    "@capacitor/ios": "^8.3.0",
+    "capacitor-passkey-prf": "file:plugins/capacitor-passkey-prf"
   },
   "devDependencies": {
     "typescript": "^6.0.2"
