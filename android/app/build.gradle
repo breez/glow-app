@@ -4,7 +4,7 @@ android {
     namespace = "technology.breez.glow"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "technology.breez.glow"
+        applicationId "com.breez.spark.glow.dev"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
