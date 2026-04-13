@@ -183,7 +183,7 @@ App launch (native) -> retrieveSeed() [biometric prompt]
 
 | Phase | Status | Notes |
 |-------|--------|-------|
-| 1. Repo + Scaffold | In Progress | 2025-04-11 |
-| 2. Passkey Plugin | Not Started | Blocked on Phase 1 verification |
-| 3. Keychain Storage | Not Started | Blocked on Phase 2 |
+| 1. Repo + Scaffold | Complete | |
+| 2. Passkey Plugin | Complete | E2E verified on iOS + Android. Depends on SDK PR #781 local builds. |
+| 3. Keychain Storage | Not Started | Blocked on Phase 2 merge |
 | 4. Polish | Not Started | Blocked on Phase 3 |

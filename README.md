@@ -49,15 +49,12 @@ npx cap sync
 
 ## Development
 
+The passkey PRF plugin depends on local Spark SDK builds. See **[DEVELOPMENT.md](DEVELOPMENT.md)** for full setup instructions, or:
+
 ```bash
-# Open in Xcode
-npx cap open ios
-
-# Open in Android Studio
-npx cap open android
-
-# Rebuild after web changes
-cd glow-web && npm run build && cd .. && npx cap sync
+make setup    # full first-time setup
+make ios      # build for iOS
+make android  # build for Android
 ```
 
 ## Implementation Status
@@ -66,7 +63,7 @@ See [PLAN.md](PLAN.md) for the full implementation plan and current status.
 
 | Phase | Status |
 |-------|--------|
-| 1. Capacitor Scaffold | In Progress |
-| 2. Passkey PRF Plugin | Not Started |
+| 1. Capacitor Scaffold | Complete |
+| 2. Passkey PRF Plugin | Complete |
 | 3. Keychain Storage | Not Started |
 | 4. Polish & Distribution | Not Started |

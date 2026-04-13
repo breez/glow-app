@@ -18,25 +18,25 @@ SDK:          ~/Documents/GitHub/spark-sdk
 ## Build Flow
 
 ```bash
-# Build web app
-cd glow-web && npm run build && cd ..
-
-# Sync to native projects
-npx cap sync
-
-# Open in IDE
-npx cap open ios      # Xcode
-npx cap open android  # Android Studio
+make setup       # full first-time setup (SDK + web + native)
+make web         # rebuild web after glow-web changes
+make sync        # copy web assets to native projects
+make ios         # build iOS
+make android     # build Android
+make deploy-ios  # build + install on iOS device
+make deploy-android  # build + install on Android device
 ```
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup guide including SDK build prerequisites.
 
 ## Architecture
 
 - `capacitor.config.ts` — Capacitor config, webDir points to `glow-web/dist`
 - `plugins/capacitor-passkey-prf/` — Local Capacitor plugin bridging native passkey PRF APIs
-  - iOS: Swift, based on Spark SDK's `PlatformPasskeyPrfProvider` (ASAuthorization + PRF extension)
-  - Android: Kotlin, based on Spark SDK's `CredentialManagerPrfCore` (CredentialManager + PRF extension)
-  - Web fallback: delegates to `navigator.credentials` WebAuthn API
-- Integration with glow-web via `PasskeyPrfProvider` interface — factory pattern detects native vs. web
+  - iOS: Swift, wraps SDK's `PlatformPasskeyPrfProvider` (ASAuthorization + PRF extension)
+  - Android: Kotlin, wraps SDK's `CredentialManagerPrfProvider` (CredentialManager + PRF extension)
+  - Native-only — no web fallback; on web, glow-web uses the SDK's `WebAuthnPrfProvider` directly
+- Integration with glow-web via `PasskeyPrfProvider` interface — runtime detection swaps native vs. browser provider
 
 ## Key References
 
@@ -45,14 +45,28 @@ npx cap open android  # Android Studio
 - iOS requires: Associated Domains entitlement `webcredentials:keys.breez.technology`, iOS 18+
 - Android requires: `assetlinks.json` on RP domain, minSdk 28 with Play Services
 
+## SDK Dependencies
+
+The passkey plugin depends on local Spark SDK builds (`pr/passkey-core` branch):
+- **iOS**: Local Swift package dependency → `../spark-sdk/crates/breez-sdk/bindings/langs/swift`
+- **Android**: `breez_sdk_spark:bindings-android:0.1.0-local` from mavenLocal
+- **WASM**: tgz installed into glow-web from `spark-sdk/packages/wasm/`
+
+Build all with `make sdk`. See DEVELOPMENT.md for details.
+
 ## Common Tasks
 
 ### After glow-web changes
 ```bash
-cd glow-web && git pull && npm install && npm run build && cd .. && npx cap sync
+make web && make sync
 ```
 
-### Update glow-web submodule to latest main
+### Rebuild after SDK changes
 ```bash
-cd glow-web && git checkout main && git pull && cd .. && git add glow-web && git commit -m "chore: update glow-web submodule"
+make sdk && make web && make sync
+```
+
+### Update glow-web submodule
+```bash
+cd glow-web && git pull && cd .. && git add glow-web && git commit -m "chore: update glow-web submodule"
 ```
