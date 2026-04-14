@@ -1,0 +1,42 @@
+{
+  "name": "capacitor-passkey-prf",
+  "version": "0.0.1",
+  "description": "Capacitor plugin for native passkey PRF (WebAuthn PRF extension via ASAuthorization / CredentialManager)",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "unpkg": "dist/plugin.js",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "dist/",
+    "ios/Sources/",
+    "ios/Package.swift",
+    "ios/Package.resolved"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "passkey",
+    "webauthn",
+    "prf"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  }
+}
