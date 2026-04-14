@@ -5,8 +5,15 @@
 
 # ---------- Configuration ----------
 
-# Path to local spark-sdk checkout (pr/passkey-core branch)
-SPARK_SDK_DIR ?= ../spark-sdk
+# Path to local spark-sdk checkout (pr/passkey-core branch).
+#
+# MUST be absolute: the `web` target does `cd glow-web && npm install $(SDK_WASM_TGZ)`,
+# and a relative path stops resolving from glow-web/ (it would look up
+# glow-app/glow-web/../spark-sdk/... which is glow-app/spark-sdk — wrong,
+# spark-sdk is a sibling of glow-app, not a child). `$(abspath ...)` resolves
+# to an absolute path without requiring the target to exist, so overriding
+# via `make SPARK_SDK_DIR=/path/to/spark-sdk` still works.
+SPARK_SDK_DIR ?= $(abspath ../spark-sdk)
 BINDINGS_DIR = $(SPARK_SDK_DIR)/crates/breez-sdk/bindings
 SDK_SWIFT_DIR = $(BINDINGS_DIR)/langs/swift
 SDK_ANDROID_DIR = $(BINDINGS_DIR)/langs/android
@@ -61,7 +68,13 @@ deploy-ios: ios ## Build and install on connected iOS device
 
 deploy-android: android ## Build and install on connected Android device
 	adb -s $(ANDROID_DEVICE_ID) install -r android/app/build/outputs/apk/debug/app-debug.apk
-	adb -s $(ANDROID_DEVICE_ID) shell am start -n com.breez.spark.glow/.MainActivity
+	@# The Debug build's applicationId is `com.breez.spark.glow.dev` (from app/build.gradle)
+	@# and the MainActivity class lives in the `technology.breez.glow` namespace, so
+	@# `am start -n com.breez.spark.glow/.MainActivity` resolves to the wrong FQCN and
+	@# fails with "Activity class does not exist". `monkey` takes just the package
+	@# name and resolves the default launcher activity automatically — resilient to
+	@# applicationId suffixes and namespace changes.
+	adb -s $(ANDROID_DEVICE_ID) shell monkey -p com.breez.spark.glow.dev -c android.intent.category.LAUNCHER 1
 
 clean: ## Remove build artifacts
 	rm -rf glow-web/dist
