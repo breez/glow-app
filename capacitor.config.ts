@@ -4,25 +4,45 @@ const config: CapacitorConfig = {
   appId: 'com.breez.spark.glow',
   appName: 'Glow',
   webDir: 'glow-web/dist',
-  // SECURITY: pin Capacitor's bridge logging to "production" in every build.
+  // SECURITY: pin Capacitor's bridge logging to "none" in every build.
   //
-  // The default is "debug" in Debug builds, which writes every plugin call's
-  // method data AND every plugin return value to logcat (Android) / NSLog
-  // (iOS) at verbose level. Several plugin calls in this app pass wallet
-  // seed material through the bridge:
+  // WARNING: Capacitor's `loggingBehavior` naming is inverted from what it
+  // sounds like. Reading CapConfig.java:290-304:
+  //
+  //   - "debug"      (default) → loggingEnabled = isDebug
+  //                              (log in debuggable builds, silent in release)
+  //   - "production"           → loggingEnabled = true
+  //                              (ALWAYS log, including release builds — the
+  //                              OPPOSITE of what the name implies)
+  //   - "none"                 → loggingEnabled = false
+  //                              (never log, regardless of build config)
+  //
+  // We must use "none" to actually suppress Capacitor's bridge traces.
+  //
+  // Why we care: Bridge.java:826 logs every plugin call at verbose level:
+  //   V Capacitor: callback: X, pluginId: Y, methodName: Z, methodData: {...}
+  // which writes the full argument payload to logcat / NSLog. Several
+  // plugin calls in this app pass wallet seed material through the bridge:
   //
   //   - PasskeyPrf.derivePrfSeed returns the 32-byte PRF entropy.
-  //   - SecureStorage.internalSetItem receives the plaintext mnemonic JSON
-  //     blob produced by NativeSecureStorage.storeSeed.
+  //   - NativeVault.storeSeed receives the plaintext mnemonic JSON blob
+  //     from NativeSecureStorage.storeSeed.
   //
-  // The verbose bridge log treats those payloads like any other and writes
-  // them in the clear to a system log file readable by any process with the
-  // READ_LOGS permission (granted to many OEM apps on Android, and to
-  // Console.app on iOS). "production" suppresses the verbose plugin call
-  // and result traces in every build configuration but leaves
-  // console.warn / console.error WebView messages bridged so debugging
-  // failure paths in the structured logger remains possible.
-  loggingBehavior: 'production',
+  // With any setting other than "none", those payloads are written in
+  // cleartext to system log files readable by any process with READ_LOGS
+  // (granted to many OEM apps on Android, and to Console.app on iOS).
+  //
+  // Tradeoff: "none" ALSO suppresses WebView console.* → native log
+  // bridging (via BridgeWebChromeClient.onConsoleMessage → Logger.info/
+  // warn/error, all gated on shouldLog()). Structured logger breadcrumbs
+  // from glow-web will no longer appear in logcat. Use the in-app log
+  // viewer (Settings → Share Logs) for debugging those paths.
+  //
+  // This is a defense-in-depth mitigation at the bridge layer. The proper
+  // fix is F2 in the follow-ups plan: keep plaintext seed material on
+  // the native side of the bridge entirely so this config choice is no
+  // longer load-bearing.
+  loggingBehavior: 'none',
   server: {
     // HTTPS scheme required for SharedArrayBuffer support in Android WebView
     androidScheme: 'https',

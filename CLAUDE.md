@@ -52,16 +52,34 @@ Stores the wallet seed in iOS Keychain / Android Keystore behind a biometric gat
 
 - Integration in `glow-web/src/hooks/useBreezSdk.ts`: the mount-time `checkForExistingWallet` tries `secureStorage.retrieveSeed` before falling through to the legacy localStorage / passkey paths. `connectWallet` takes a `source: ConnectSeedSource` parameter (`'onboarding'` vs `'secureStorage'`) so the post-connect persist block skips a redundant `storeSeed` write when the seed was just retrieved from the same store. `handleLogout` calls `clearSeed` alongside the existing `clearMnemonic` / `clearPasskeyMode`.
 
-### ⚠️ Security: `loggingBehavior: 'production'` is REQUIRED
+### ⚠️ Security: `loggingBehavior: 'none'` is REQUIRED
 
-`capacitor.config.ts` pins `loggingBehavior: 'production'`. **Do not revert this.** Capacitor's default (`'debug'` in Debug builds) writes every plugin call's method data and return value to logcat (Android) / NSLog (iOS) at verbose level. Several plugin calls in this app pass wallet seed material through the bridge:
+`capacitor.config.ts` pins `loggingBehavior: 'none'`. **Do not revert this.**
+
+**Capacitor's `loggingBehavior` naming is inverted** — reading `CapConfig.java:290-304`:
+
+- `'debug'` (default) → logs in debuggable builds, silent in release
+- `'production'` → **always** logs, including release builds (the OPPOSITE of what the name implies)
+- `'none'` → never logs in any build config
+
+The value that actually suppresses logging is `'none'`, not `'production'`. The initial F2 "security fix" pinned `'production'` based on a misreading of the setting name and therefore **did nothing** — bridge traces were still leaking. F3 verification caught this by grepping logcat for the mnemonic after Test 1 and finding a full plaintext `storeSeed` payload. Do not trust the setting name; trust the source code.
+
+Why we care: `Bridge.java:826` logs every plugin call's argument payload at verbose level:
+
+```
+V Capacitor: callback: X, pluginId: Y, methodName: Z, methodData: {...}
+```
+
+Several plugin calls in this app pass wallet seed material through the bridge:
 
 - `PasskeyPrf.derivePrfSeed` returns the 32-byte PRF entropy as base64.
-- `SecureStorage.internalSetItem` (called by `NativeSecureStorage.storeSeed`) receives the plaintext mnemonic JSON blob.
+- `NativeVault.storeSeed` receives the plaintext mnemonic JSON blob from `NativeSecureStorage.storeSeed`.
 
-With `'debug'`, the bridge logs those payloads in the clear to system log files readable by any process with `READ_LOGS` (granted to many OEM apps on Android, Console.app on iOS). `'production'` suppresses the verbose plugin call/return traces in every build configuration while leaving WebView `console.warn` / `console.error` bridging intact for debugging the structured logger's failure paths.
+With any setting other than `'none'`, those payloads are written to logcat (Android) / NSLog (iOS) and are readable by any process with `READ_LOGS` (granted to many OEM apps on Android; Console.app on iOS).
 
-This is a defense-in-depth mitigation at the bridge layer. The proper fix (tracked as F2 in the follow-ups) is to keep plaintext seed material on the native side of the bridge entirely — until that lands, the config pin is the only safety net.
+**Tradeoff**: `'none'` also suppresses WebView `console.*` → native log bridging (via `BridgeWebChromeClient.onConsoleMessage` → `Logger.info/warn/error`, all gated on `shouldLog()`). Structured logger breadcrumbs from glow-web will no longer appear in logcat. Use the in-app log viewer (Settings → Share Logs) for debugging those paths.
+
+This is defense-in-depth at the bridge layer. The proper fix (tracked as F2 in the follow-ups) is to keep plaintext seed material on the native side of the bridge entirely — until that lands, the config pin is the only safety net.
 
 ### aparajita plugin import pattern
 
