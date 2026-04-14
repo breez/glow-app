@@ -2,6 +2,7 @@ package technology.breez.glow.nativevault
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -17,23 +18,41 @@ import javax.crypto.spec.GCMParameterSpec
  * `SeedVaultProviding` implementation backed by:
  *
  *   - Android Keystore for the AES-GCM key (hardware-backed when the
- *     device supports it; falls back to TEE on others)
- *   - SharedPreferences for the encrypted ciphertext + IV blob
+ *     device supports it; falls back to TEE on others). F3 marks the
+ *     key as `setUserAuthenticationRequired(true)` with
+ *     `AUTH_BIOMETRIC_STRONG`, so `Cipher.init(...)` against it is
+ *     unusable until the caller has wrapped it in a
+ *     `BiometricPrompt.CryptoObject` and obtained a biometric auth.
+ *     The key is also `setInvalidatedByBiometricEnrollment(true)`, so
+ *     any new biometric enrollment voids it and forces re-onboarding
+ *     (Apple's recommended failsafe pattern, replicated for Android).
  *
- * In F2 the AES key is created without `setUserAuthenticationRequired`,
- * so any process holding the device-unlocked state can use it. F3 will
- * tighten this by adding `setUserAuthenticationRequired(true)` and
- * `setInvalidatedByBiometricEnrollment(true)`, which:
+ *   - SharedPreferences for the encrypted ciphertext + IV blob. Wiped
+ *     on app uninstall (unlike the Keystore key, which also gets wiped
+ *     on uninstall, but we wipe prefs explicitly when clearing the
+ *     seed for defense-in-depth).
  *
- *   - Forces biometric authentication on every `Cipher.init` (binding
- *     the cryptographic operation to the auth result via `CryptoObject`)
- *   - Wipes the key automatically on any new biometric enrollment,
- *     forcing the user to re-onboard with a fresh wallet (Apple's
- *     recommended failsafe pattern, replicated for Android)
+ * F3 architecture note: the store/retrieve flows are split into
+ * `prepareX` / `finishX` halves. `Cipher.init(mode, key)` against a
+ * `setUserAuthenticationRequired(true)` key succeeds without biometric
+ * auth — it's the first `doFinal` / `update` call that throws
+ * `UserNotAuthenticatedException`. So the plugin can:
  *
- * Also in F2: `KeyPermanentlyInvalidatedException` is mapped to
- * `KEY_INVALIDATED` so the JS layer wipes the stored blob and falls
- * through to the legacy passkey path.
+ *   1. Call `prepareEncryptCipher` / `prepareDecryptCipher` to get
+ *      an initialized but not-yet-used Cipher.
+ *   2. Wrap it in a `BiometricPrompt.CryptoObject` and show the
+ *      system biometric prompt.
+ *   3. On successful auth, `BiometricPrompt.AuthenticationCallback`
+ *      hands back a CryptoObject whose Cipher is now authorized for
+ *      exactly one cryptographic operation.
+ *   4. Call `finishEncryptAndStore` / `finishDecrypt` with the
+ *      authenticated Cipher to run the single `doFinal` call.
+ *
+ * This is the idiomatic Android API shape for biometric-bound
+ * keys. iOS's `KeychainSeedVault` is architecturally simpler because
+ * the Keychain `SecAccessControl` handles the biometric prompt inline,
+ * so it does NOT need a prepare/finish split. This divergence is
+ * intentional — each platform matches its OS-native pattern.
  */
 class KeystoreSeedVault(context: Context) : SeedVaultProviding {
 
@@ -46,28 +65,16 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         return prefs.contains(PREFS_KEY_CIPHERTEXT)
     }
 
-    override fun storeSeed(seed: String): SeedVaultResult<Unit> {
+    override fun prepareEncryptCipher(): SeedVaultResult<Cipher> {
         return try {
             val key = getOrCreateKey()
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
-
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(seed.toByteArray(Charsets.UTF_8))
-
-            // Write iv + ciphertext atomically. Atomicity protects the
-            // invariant that whenever PREFS_KEY_CIPHERTEXT is present, the
-            // matching IV is also present.
-            prefs.edit()
-                .putString(PREFS_KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
-                .putString(PREFS_KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
-                .apply()
-
-            SeedVaultResult.Ok(Unit)
+            SeedVaultResult.Ok(cipher)
         } catch (e: KeyPermanentlyInvalidatedException) {
-            // The Keystore key was wiped (e.g. lock screen credential
-            // change). The existing ciphertext is unrecoverable; clear
-            // both halves so a subsequent retrieve hits NO_STORED_SEED.
+            // The Keystore key was wiped (new biometric enrollment,
+            // lock-screen credential change, etc.). Wipe any stale
+            // ciphertext + the key entry so the next call regenerates.
             clearStoredCiphertextOnly()
             try { deleteKey() } catch (_: Exception) { /* best-effort */ }
             SeedVaultResult.Error(
@@ -75,13 +82,41 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
                 "Keystore key invalidated: ${e.message ?: "unknown"}",
             )
         } catch (e: GeneralSecurityException) {
-            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "Crypto failure: ${e.message ?: "unknown"}")
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "Crypto init failure: ${e.message ?: "unknown"}")
         } catch (e: Exception) {
-            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "storeSeed failed: ${e.message ?: "unknown"}")
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "prepareEncryptCipher failed: ${e.message ?: "unknown"}")
         }
     }
 
-    override fun retrieveSeed(): SeedVaultResult<String> {
+    override fun finishEncryptAndStore(seed: String, cipher: Cipher): SeedVaultResult<Unit> {
+        return try {
+            val iv = cipher.iv
+            val ciphertext = cipher.doFinal(seed.toByteArray(Charsets.UTF_8))
+
+            // Write iv + ciphertext atomically. Atomicity protects the
+            // invariant that whenever PREFS_KEY_CIPHERTEXT is present,
+            // the matching IV is also present.
+            prefs.edit()
+                .putString(PREFS_KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
+                .putString(PREFS_KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+                .apply()
+
+            SeedVaultResult.Ok(Unit)
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            clearStoredCiphertextOnly()
+            try { deleteKey() } catch (_: Exception) { /* best-effort */ }
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.KEY_INVALIDATED,
+                "Keystore key invalidated during encrypt: ${e.message ?: "unknown"}",
+            )
+        } catch (e: GeneralSecurityException) {
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "Encrypt failure: ${e.message ?: "unknown"}")
+        } catch (e: Exception) {
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "finishEncryptAndStore failed: ${e.message ?: "unknown"}")
+        }
+    }
+
+    override fun prepareDecryptCipher(): SeedVaultResult<Cipher> {
         if (!hasStoredSeed()) {
             return SeedVaultResult.NotFound
         }
@@ -97,20 +132,12 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
                     NativeVaultErrorCode.KEY_INVALIDATED,
                     "Stored ciphertext exists but IV is missing",
                 )
-            val ciphertextBase64 = prefs.getString(PREFS_KEY_CIPHERTEXT, null)
-                ?: return SeedVaultResult.NotFound
 
             val iv = Base64.decode(ivBase64, Base64.NO_WRAP)
-            val ciphertext = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
-
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
-            val plaintext = cipher.doFinal(ciphertext)
-
-            SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+            SeedVaultResult.Ok(cipher)
         } catch (e: KeyPermanentlyInvalidatedException) {
-            // Wipe both halves and delete the key so the next attempt is a
-            // clean fresh-install state.
             clearStoredCiphertextOnly()
             try { deleteKey() } catch (_: Exception) { /* best-effort */ }
             SeedVaultResult.Error(
@@ -118,9 +145,31 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
                 "Keystore key invalidated: ${e.message ?: "unknown"}",
             )
         } catch (e: GeneralSecurityException) {
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "Decrypt init failure: ${e.message ?: "unknown"}")
+        } catch (e: Exception) {
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "prepareDecryptCipher failed: ${e.message ?: "unknown"}")
+        }
+    }
+
+    override fun finishDecrypt(cipher: Cipher): SeedVaultResult<String> {
+        val ciphertextBase64 = prefs.getString(PREFS_KEY_CIPHERTEXT, null)
+            ?: return SeedVaultResult.NotFound
+
+        return try {
+            val ciphertext = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
+            val plaintext = cipher.doFinal(ciphertext)
+            SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            clearStoredCiphertextOnly()
+            try { deleteKey() } catch (_: Exception) { /* best-effort */ }
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.KEY_INVALIDATED,
+                "Keystore key invalidated during decrypt: ${e.message ?: "unknown"}",
+            )
+        } catch (e: GeneralSecurityException) {
             SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "Decrypt failure: ${e.message ?: "unknown"}")
         } catch (e: Exception) {
-            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "retrieveSeed failed: ${e.message ?: "unknown"}")
+            SeedVaultResult.Error(NativeVaultErrorCode.UNKNOWN, "finishDecrypt failed: ${e.message ?: "unknown"}")
         }
     }
 
@@ -153,20 +202,63 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         return generateKey()
     }
 
+    /**
+     * Generate the F3 AES-GCM key. The three flags that matter:
+     *
+     *   - `setUserAuthenticationRequired(true)` — every cryptographic
+     *     operation against this key requires a fresh biometric auth
+     *     (via `BiometricPrompt.CryptoObject`). Without this, anyone
+     *     with access to the app's process while the device is
+     *     unlocked could decrypt the seed.
+     *
+     *   - `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`
+     *     (API 30+) — `0` means the authentication authorizes a
+     *     SINGLE crypto operation (not a time window), and
+     *     `AUTH_BIOMETRIC_STRONG` requires Class 3 biometrics (Face /
+     *     Touch) without the lock-screen credential fallback. On
+     *     API < 30 we fall back to the legacy `setUserAuthenticationValidityDurationSeconds(-1)`
+     *     which has the same single-operation semantics.
+     *
+     *   - `setInvalidatedByBiometricEnrollment(true)` — if the user
+     *     adds a new fingerprint / face enrollment, the key is wiped.
+     *     This forces re-onboarding with a fresh wallet, following
+     *     Apple's recommended "BiometryCurrentSet" failsafe pattern.
+     *     Without this, an attacker who could enroll their own
+     *     biometric (e.g. with a device unlock code) could then
+     *     decrypt the stored seed.
+     */
     private fun generateKey(): SecretKey {
         val keyGenerator = KeyGenerator.getInstance(
             KeyProperties.KEY_ALGORITHM_AES,
             ANDROID_KEY_STORE,
         )
-        val spec = KeyGenParameterSpec.Builder(
+        val builder = KeyGenParameterSpec.Builder(
             KEY_ALIAS,
             KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
         )
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setKeySize(AES_KEY_SIZE_BITS)
-            .build()
-        keyGenerator.init(spec)
+            .setUserAuthenticationRequired(true)
+            .setInvalidatedByBiometricEnrollment(true)
+
+        // Post-R (API 30+) we can explicitly opt into the single-
+        // operation, biometric-strong authentication policy. On older
+        // devices, `-1` seconds achieves the single-operation semantics
+        // but without the explicit biometric-strong binding; we rely
+        // on BiometricPrompt's runtime `AUTH_BIOMETRIC_STRONG`
+        // allowed-authenticators flag to enforce the class there.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setUserAuthenticationParameters(
+                0, // timeout seconds; 0 = authorize a single crypto op
+                KeyProperties.AUTH_BIOMETRIC_STRONG,
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            builder.setUserAuthenticationValidityDurationSeconds(-1)
+        }
+
+        keyGenerator.init(builder.build())
         return keyGenerator.generateKey()
     }
 

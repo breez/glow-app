@@ -2,9 +2,15 @@ import Foundation
 import LocalAuthentication
 
 /// `BiometricAuthProviding` implementation backed by `LocalAuthentication`'s
-/// `LAContext.evaluatePolicy`. Used in F2; F3 will tighten this by binding
-/// the biometric to a Keychain `SecAccessControl` flag so the prompt happens
-/// inside the cryptographic operation (no external auth gate).
+/// `LAContext.evaluatePolicy`.
+///
+/// F3 note: `NativeVaultPlugin` no longer calls `authenticate()` on iOS —
+/// the biometric prompt is triggered inline by the Keychain via a
+/// `SecAccessControl` with `.biometryCurrentSet`. This file therefore
+/// only services `checkCapability()` for the plugin's `checkBiometry`
+/// JS method. The `authenticate()` implementation is kept for protocol
+/// conformance and as an escape hatch for future callers that need a
+/// standalone biometric gate (e.g. unlocking a password-vault screen).
 final class LocalAuthBiometricAuth: BiometricAuthProviding {
     func checkCapability() -> BiometryCapability {
         let context = LAContext()

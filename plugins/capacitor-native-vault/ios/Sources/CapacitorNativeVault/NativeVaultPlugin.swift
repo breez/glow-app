@@ -5,14 +5,19 @@ import Foundation
 /// JS (`checkBiometry`, `hasStoredSeed`, `storeSeed`, `retrieveSeed`,
 /// `clearSeed`) and delegates each one to a dedicated provider:
 ///
-///   - `BiometricAuthProviding` for the biometric prompt
+///   - `BiometricAuthProviding` for `checkBiometry`
 ///   - `SeedVaultProviding` for the actual Keychain read/write
 ///
 /// Splitting the work across protocol-conforming providers (instead of
 /// stuffing everything into the plugin class) keeps each concern testable
-/// in isolation and makes the F3 hardening work surgical: F3 swaps the
-/// providers' internal implementation (binding biometric to the Keychain
-/// access control flag) without touching the plugin class or the JS API.
+/// in isolation.
+///
+/// F3 note: on iOS, the biometric prompt is triggered inline by the
+/// Keychain itself via `SecAccessControl` with `.biometryCurrentSet`.
+/// This plugin class therefore does NOT call `BiometricAuthProviding.authenticate`
+/// around `retrieveSeed` / `storeSeed` — the crypto layer (Keychain)
+/// owns the prompt. `BiometricAuthProviding` is only used for the
+/// synchronous `checkBiometry` capability query.
 @objc(NativeVaultPlugin)
 public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "NativeVaultPlugin"
@@ -51,47 +56,55 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Missing required parameter: seed", NativeVaultErrorCode.unknown.rawValue)
             return
         }
-        switch vault.storeSeed(seed) {
-        case .ok:
-            call.resolve()
-        case .notFound:
-            // `notFound` is a non-sensical outcome for a write; treat as unknown.
-            call.reject("Seed vault returned notFound on storeSeed", NativeVaultErrorCode.unknown.rawValue)
-        case .error(let code, let message):
-            call.reject(message, code.rawValue)
+        // F3: `KeychainSeedVault.storeSeed` may trigger a biometric
+        // prompt (the first write creates the SecAccessControl-protected
+        // item). That prompt can block on the main thread; move the
+        // call off it so we don't jank the webview. The `Task.detached`
+        // runs on a concurrent background queue, then we hop back to
+        // main to resolve the PluginCall.
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            let result = self.vault.storeSeed(seed)
+            await MainActor.run {
+                switch result {
+                case .ok:
+                    call.resolve()
+                case .notFound:
+                    // `notFound` is a non-sensical outcome for a write; treat as unknown.
+                    call.reject("Seed vault returned notFound on storeSeed", NativeVaultErrorCode.unknown.rawValue)
+                case .error(let code, let message):
+                    call.reject(message, code.rawValue)
+                }
+            }
         }
     }
 
     @objc func retrieveSeed(_ call: CAPPluginCall) {
-        // 1. Pre-flight: if no entry exists, fail fast with NO_STORED_SEED
-        //    *before* showing a biometric prompt. Otherwise the user would
-        //    authenticate just to be told "nothing stored".
-        guard vault.hasStoredSeed() else {
-            call.reject(
-                "No seed is currently persisted in secure storage.",
-                NativeVaultErrorCode.noStoredSeed.rawValue
-            )
-            return
-        }
-
-        // 2. Prompt for biometric authentication. The closure is called on
-        //    an arbitrary thread; hop back to main before resolving the
-        //    PluginCall so any UI updates triggered downstream happen on
-        //    the right thread.
-        biometric.authenticate(
-            reason: "Unlock your Glow wallet",
-            onSuccess: { [weak self] in
-                guard let self = self else { return }
-                DispatchQueue.main.async {
-                    self.completeRetrieveAfterAuth(call)
-                }
-            },
-            onFailure: { code, message in
-                DispatchQueue.main.async {
+        // F3: No explicit biometric pre-step. `KeychainSeedVault.retrieveSeed`
+        // triggers the biometric prompt inline as part of
+        // `SecItemCopyMatching` against the `.biometryCurrentSet`-guarded
+        // item. The Keychain call blocks the current thread until the
+        // user either authenticates or dismisses the prompt, so we must
+        // run it on a background thread to avoid freezing the webview.
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            let result = self.vault.retrieveSeed()
+            await MainActor.run {
+                switch result {
+                case .ok(let seed):
+                    call.resolve(["seed": seed])
+                case .notFound:
+                    // Entry missing. Either there was never one, or it
+                    // was cleared between `hasStoredSeed` and here.
+                    call.reject(
+                        "No seed is currently persisted in secure storage.",
+                        NativeVaultErrorCode.noStoredSeed.rawValue
+                    )
+                case .error(let code, let message):
                     call.reject(message, code.rawValue)
                 }
             }
-        )
+        }
     }
 
     @objc func clearSeed(_ call: CAPPluginCall) {
@@ -99,28 +112,6 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         case .ok, .notFound:
             // Idempotent — clearing a missing entry is success.
             call.resolve()
-        case .error(let code, let message):
-            call.reject(message, code.rawValue)
-        }
-    }
-
-    // MARK: - Internal
-
-    /// Second half of `retrieveSeed`: runs after biometric auth has
-    /// succeeded. Reads the actual Keychain entry and resolves / rejects
-    /// the outstanding `PluginCall`.
-    private func completeRetrieveAfterAuth(_ call: CAPPluginCall) {
-        switch vault.retrieveSeed() {
-        case .ok(let seed):
-            call.resolve(["seed": seed])
-        case .notFound:
-            // Race: the entry was cleared between the pre-flight check and
-            // the biometric callback. Surface it as NO_STORED_SEED so the
-            // caller falls through to onboarding.
-            call.reject(
-                "No seed is currently persisted in secure storage.",
-                NativeVaultErrorCode.noStoredSeed.rawValue
-            )
         case .error(let code, let message):
             call.reject(message, code.rawValue)
         }
