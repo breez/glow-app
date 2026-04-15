@@ -22,3 +22,5 @@ android/local.properties
 # OS
 .DS_Store
 Thumbs.db
+/plugins/capacitor-passkey-prf/.build
+/plugins/capacitor-native-vault/.build
