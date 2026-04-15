@@ -4,7 +4,8 @@ Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web) PWA.
 
 Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA in a native shell with:
 - **Native passkey PRF** — biometric authentication via ASAuthorization (iOS) and CredentialManager (Android), since WebAuthn is unavailable in WebViews
-- **Keychain seed storage** — derived seed cached in iOS Keychain / Android Keystore with biometric protection for instant app launches
+- **Native secure vault** — wallet seed stored in iOS Keychain / Android Keystore with biometric binding enforced by the OS, not just a JS-side gate. Adding a new Face ID / Touch ID / fingerprint enrollment voids the stored seed automatically
+- **Dedicated unlock screen** — cancelling the biometric prompt lands on a retry/abandon flow instead of dropping the user onto onboarding, where they could accidentally create a new passkey label and orphan the stored wallet
 - **Push notifications** (planned) — notifications for Lightning address payments
 
 ## Architecture
@@ -15,11 +16,12 @@ glow-app/
   ios/                         # Xcode project
   android/                     # Android Studio project
   plugins/
-    capacitor-passkey-prf/     # Local Capacitor plugin for native passkey PRF
+    capacitor-passkey-prf/     # Native passkey PRF bridge (ASAuthorization / CredentialManager)
+    capacitor-native-vault/    # Biometric-bound Keychain / Keystore seed storage
   capacitor.config.ts          # Capacitor configuration
 ```
 
-The web app (glow-web) is built with Vite and the output (`glow-web/dist/`) is loaded into native WebViews by Capacitor. The passkey PRF plugin bridges to native passkey APIs since `navigator.credentials` is not available in WebViews.
+The web app (glow-web) is built with Vite and the output (`glow-web/dist/`) is loaded into native WebViews by Capacitor. Two in-house Capacitor plugins bridge to native APIs that aren't available in WebViews: `capacitor-passkey-prf` for passkey + PRF extension, and `capacitor-native-vault` for biometric-bound secure storage.
 
 ## Prerequisites
 
@@ -61,9 +63,9 @@ make android  # build for Android
 
 See [PLAN.md](PLAN.md) for the full implementation plan and current status.
 
-| Phase | Status |
-|-------|--------|
-| 1. Capacitor Scaffold | Complete |
-| 2. Passkey PRF Plugin | Complete |
-| 3. Keychain Storage | Not Started |
-| 4. Polish & Distribution | Not Started |
+| Phase | Status | Notes |
+|-------|--------|-------|
+| 1. Capacitor Scaffold | Complete | |
+| 2. Passkey PRF Plugin | Complete | Merged in #1 |
+| 3. Native Secure Vault | Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix) |
+| 4. Polish & Distribution | Not Started | App icons, splash screen, CI, TestFlight / Play Store internal testing |
