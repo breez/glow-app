@@ -102,16 +102,40 @@ final class KeychainSeedVault: SeedVaultProviding {
     }
 
     func retrieveSeed() -> SeedVaultResult<String> {
+        // Pre-flight: probe LAContext.canEvaluatePolicy so we can
+        // distinguish "biometry is genuinely unavailable" (e.g. the user
+        // denied the NSFaceIDUsageDescription system permission prompt)
+        // from "user cancelled the prompt this time". Without this, the
+        // Keychain call returns errSecUserCanceled in BOTH cases and we
+        // map it to .userCancelled — which in glow-web leads to the
+        // UnlockPage sitting silently, since cancellation is normally a
+        // retry-by-tapping state. The user would tap Unlock and nothing
+        // would happen because the biometric evaluation can't get off
+        // the ground.
+        let readContext = LAContext()
+        readContext.localizedReason = "Unlock your Glow wallet"
+
+        var policyError: NSError?
+        let canEvaluate = readContext.canEvaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            error: &policyError
+        )
+        if !canEvaluate {
+            let code = mapLAPolicyError(policyError)
+            return .error(
+                code,
+                policyError?.localizedDescription ?? "Biometric authentication unavailable"
+            )
+        }
+
         var query = baseQuery()
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         // F3: the biometric prompt is triggered inline by the Keychain
-        // call itself. Provide a LAContext with our prompt copy so
-        // users see "Unlock your Glow wallet" instead of the default
-        // generic system text.
-        let readContext = LAContext()
-        readContext.localizedReason = "Unlock your Glow wallet"
+        // call itself. Provide the pre-validated LAContext so users see
+        // "Unlock your Glow wallet" instead of the default generic
+        // system text.
         query[kSecUseAuthenticationContext as String] = readContext
 
         var item: CFTypeRef?
@@ -164,6 +188,34 @@ final class KeychainSeedVault: SeedVaultProviding {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+    }
+}
+
+/// Map an `LAError` surfaced by `LAContext.canEvaluatePolicy` to a
+/// `NativeVaultErrorCode`. Duplicated here (rather than imported from
+/// `LocalAuthBiometricAuth.swift`'s file-private helper) so
+/// `KeychainSeedVault` can do its own pre-flight biometric probe
+/// without coupling the two implementations together.
+private func mapLAPolicyError(_ error: NSError?) -> NativeVaultErrorCode {
+    guard let nsError = error, nsError.domain == LAErrorDomain else {
+        return .biometricUnavailable
+    }
+    guard let laError = LAError.Code(rawValue: nsError.code) else {
+        return .biometricUnavailable
+    }
+    switch laError {
+    case .biometryNotEnrolled:
+        return .biometricNotEnrolled
+    case .biometryLockout:
+        return .biometricLockout
+    case .biometryNotAvailable, .passcodeNotSet:
+        // biometryNotAvailable is what the OS returns after the user
+        // denies the NSFaceIDUsageDescription prompt — the policy
+        // genuinely cannot be evaluated until they re-grant permission
+        // in Settings → Glow → Face ID.
+        return .biometricUnavailable
+    default:
+        return .biometricUnavailable
     }
 }
 

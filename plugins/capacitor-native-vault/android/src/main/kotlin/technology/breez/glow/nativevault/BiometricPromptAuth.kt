@@ -5,6 +5,7 @@ import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import javax.crypto.Cipher
 
 /**
@@ -140,6 +141,26 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
         //     at BiometricPrompt.authenticate
         // Hop to the main looper before constructing the prompt.
         activity.runOnUiThread {
+            // Bail out if the activity isn't at least STARTED:
+            // BiometricPrompt.authenticate calls FragmentManager.commit
+            // which throws IllegalStateException once the host has
+            // passed onSaveInstanceState. The exception would surface
+            // as an uncaught throwable on the main looper and the
+            // authentication callback would never fire, leaving the
+            // JS caller stuck on a Promise that never resolves.
+            // STARTED (not RESUMED) is the right threshold: the
+            // AndroidX BiometricPrompt fragment uses
+            // commitAllowingStateLoss internally, so it's safe at
+            // STARTED and we avoid rejecting requests that arrive
+            // mid-resume transition.
+            if (!activity.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                onFailure(
+                    NativeVaultErrorCode.USER_CANCELLED,
+                    "Activity not at least STARTED; biometric prompt deferred",
+                )
+                return@runOnUiThread
+            }
+
             val executor = ContextCompat.getMainExecutor(context)
             val prompt = BiometricPrompt(
                 activity,
@@ -169,10 +190,26 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
                 .setConfirmationRequired(false)
                 .build()
 
-            if (cryptoObject != null) {
-                prompt.authenticate(info, cryptoObject)
-            } else {
-                prompt.authenticate(info)
+            // Belt-and-braces: the activity could still transition to
+            // STOPPED between the lifecycle check above and the
+            // authenticate call below. Catch the resulting
+            // IllegalStateException so the JS Promise always resolves.
+            try {
+                if (cryptoObject != null) {
+                    prompt.authenticate(info, cryptoObject)
+                } else {
+                    prompt.authenticate(info)
+                }
+            } catch (e: IllegalStateException) {
+                onFailure(
+                    NativeVaultErrorCode.USER_CANCELLED,
+                    "BiometricPrompt.authenticate failed: ${e.message ?: "IllegalStateException"}",
+                )
+            } catch (e: Throwable) {
+                onFailure(
+                    NativeVaultErrorCode.UNKNOWN,
+                    "BiometricPrompt.authenticate failed: ${e.message ?: e::class.simpleName}",
+                )
             }
         }
     }
