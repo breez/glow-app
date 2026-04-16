@@ -1,0 +1,49 @@
+name: CI
+
+# Keep docs-only PRs off the full build matrix. paths-ignore applies
+# to the whole workflow; if any path NOT in this list changed, all
+# jobs run.
+#
+# ios-preview additionally fires on preview-* / rc-* tags and on
+# manual workflow_dispatch; see the job-level `if:` in Step 6.
+on:
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+  push:
+    branches: [main]
+    tags: ['preview-*', 'rc-*']
+  workflow_dispatch:
+
+# Cancel superseded runs on the same PR / branch. Matches the glow-web
+# pattern and saves ~15–25% of minute burn on busy PRs (especially
+# iOS, which is the expensive job).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege default. The ios-preview job (Step 6) scopes up to
+# what Firebase App Distribution needs.
+permissions:
+  contents: read
+
+jobs:
+  # Minimal job so the workflow is valid YAML at this commit. The
+  # real `web` / `android` / `ios` / `ios-preview` jobs land in
+  # subsequent commits and replace this one. Kept as a cheap
+  # smoke test against the composite action itself.
+  setup-smoke:
+    name: Setup smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm
