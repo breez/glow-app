@@ -23,6 +23,18 @@ SDK_WASM_TGZ = $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-v0.1.0.tgz
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 SDK_MAVEN_VERSION = 0.1.0-local
 
+# Capacitor 8 + AGP require JDK 21. Default to Android Studio's bundled
+# JBR (which is 21+) if JAVA_HOME isn't already set. Override with
+# `make JAVA_HOME=/path/to/jdk21` if you have JDK 21 from Homebrew or
+# another source.
+ANDROID_STUDIO_JBR = /Applications/Android Studio.app/Contents/jbr/Contents/Home
+ifeq ($(JAVA_HOME),)
+ifneq ($(wildcard $(ANDROID_STUDIO_JBR)),)
+JAVA_HOME := $(ANDROID_STUDIO_JBR)
+export JAVA_HOME
+endif
+endif
+
 # Device IDs (override with: make deploy-ios IOS_DEVICE_ID=xxx)
 IOS_DEVICE_ID ?= $(shell xcrun xctrace list devices 2>/dev/null | grep -m1 'iPhone.*(' | sed 's/.*(\(.*\))/\1/')
 ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | awk '{print $$1}')
@@ -87,7 +99,9 @@ deploy-android: android ## Build and install on connected Android device
 clean: ## Remove build artifacts
 	rm -rf glow-web/dist
 	rm -rf android/app/build
+	rm -rf android/build
 	cd plugins/capacitor-passkey-prf && rm -rf dist ios/.build android/build
+	cd plugins/capacitor-native-vault && rm -rf dist ios/.build android/build
 
 # ---------- SDK build targets ----------
 

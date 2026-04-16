@@ -8,6 +8,12 @@ This guide covers building glow-app locally with the native passkey PRF plugin. 
 - **Rust** (latest stable) with cross-compilation targets
 - **Xcode** 16+ (for iOS)
 - **Android Studio** with NDK installed (for Android)
+- **JDK 21** — Capacitor 8 and the Android Gradle plugin require Java 21.
+  If you use Android Studio, its bundled JDK at
+  `/Applications/Android Studio.app/Contents/jbr/Contents/Home` is 21+
+  and the Makefile defaults `JAVA_HOME` there automatically. If you run
+  Gradle outside of Android Studio, `brew install openjdk@21` and
+  export `JAVA_HOME`.
 - **ANDROID_HOME** environment variable set (typically `~/Library/Android/sdk`)
 
 Install Rust iOS/Android targets:
@@ -15,6 +21,30 @@ Install Rust iOS/Android targets:
 rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
 rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
 ```
+
+### `npm install` patches node_modules
+
+Two Capacitor packages are patched locally via
+[`patch-package`](https://www.npmjs.com/package/patch-package) on every
+`npm install`:
+
+- `patches/@capacitor+keyboard+8.0.3.patch` — applies
+  [ionic-team/capacitor-keyboard#30](https://github.com/ionic-team/capacitor-keyboard/issues/30)
+  /  [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60)
+  (unmerged upstream). Fixes the plugin's FrameLayout resize so the
+  WebView height is restored on keyboard hide via the inset listener
+  path, not just via the animation callback.
+- `patches/@capacitor+android+8.3.0.patch` — patches Capacitor core's
+  built-in `SystemBars` plugin to stop applying `imeInsets.bottom` as
+  padding on the WebView parent. Android's
+  `windowSoftInputMode="adjustResize"` already shrinks the activity
+  content frame; applying IME insets again double-subtracts the
+  keyboard height and leaves a visible grey gap.
+
+The patches re-apply via the `postinstall` script in `package.json`.
+If you edit node_modules directly, re-run
+`npx patch-package @capacitor/keyboard` / `@capacitor/android` to
+regenerate the patch file.
 
 ## Quick Start
 

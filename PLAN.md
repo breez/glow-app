@@ -193,13 +193,157 @@ App launch (native) → check native secure vault
 
 ---
 
-## Phase 4: Polish & Distribution
+## Phase 4A: App Polish
 
-- App icons (1024x1024 source), splash screen (`@capacitor/splash-screen`, bg #0a0a0f)
-- iOS: Info.plist (Face ID description, camera for QR), entitlements
-- Android: manifest permissions, gradle config
-- CI: GitHub Actions for building iOS/Android
-- TestFlight / Play Store internal testing
+Make the Capacitor shell feel like a first-class native app without yet
+taking on CI or distribution work. Verified on physical Android and iOS
+devices plus the standalone web PWA build.
+
+### Branding + native shell
+- App icons (1024² source → every Android mipmap density + iOS AppIcon
+  slot) and splash (2732² source → every drawable density + iOS Splash)
+  generated from `glow-web/public/assets/Glow_Logo.png` via a
+  `scripts/prepare-native-assets.mjs` (sharp) + `@capacitor/assets` CLI
+  pipeline, wired into `make assets`. Adaptive icon background set to
+  the spark-void canvas color so the foreground glyph doesn't sit on a
+  white halo.
+- Pre-JS dark status / nav bar theme in Android `values/styles.xml` so
+  there's no flash of default chrome before the JS `StatusBar` plugin
+  initialises. iOS `LaunchScreen.storyboard` background hard-coded to
+  `#0a0a0f` so light-mode devices don't flash white behind the splash.
+- Safe-area-aware layout via a shared `src/utils/safeAreaInsets.ts`
+  helper in glow-web so every page picks consistent top/bottom values
+  from `env(safe-area-inset-*)`.
+- Per-page system bar color via a LIFO stack manager
+  (`src/utils/statusBarManager.ts` + `src/hooks/useStatusBarColor.ts`)
+  so the wallet glass tint extends into the bars, sheets show the
+  surface tone, and dialogs dim to the scrim.
+- Portrait orientation lock on iOS (`UISupportedInterfaceOrientations`)
+  and Android (`android:screenOrientation="portrait"`).
+
+### Native capabilities
+- Camera for QR scanning: `android.permission.CAMERA` +
+  `android.hardware.camera` feature tag +
+  `NSCameraUsageDescription` in Info.plist. Existing `QrScannerDialog`
+  falls back to image upload when the camera is unavailable. Front
+  camera preview is mirrored horizontally via CSS for the selfie
+  convention.
+- Log export (Settings → Share Logs) routes through
+  `@capacitor/filesystem` (write ZIP to cache dir) +
+  `@capacitor/share` (system share sheet) on native; web-only
+  `navigator.share` stays as a fallback.
+- Buy Bitcoin provider URLs open via `@capacitor/browser`
+  (Chrome Custom Tabs on Android, SFSafariViewController on iOS)
+  instead of `window.location.href`, which otherwise navigates the
+  glow-web WebView itself and gets stuck in a redirect loop on
+  Android when the user presses back.
+
+### Soft keyboard handling
+- `@capacitor/keyboard` installed with `resize: 'native'` +
+  `resizeOnFullScreen: true` + `windowSoftInputMode="adjustResize"`
+  in the manifest.
+- Two `patch-package` patches against node_modules, re-applied on
+  every `npm install`:
+  - `patches/@capacitor+keyboard+8.0.3.patch`: applies
+    ionic-team/capacitor-keyboard#30 (PR #60, unmerged upstream).
+    Fixes the plugin's FrameLayout hack to restore the view height
+    on keyboard hide via the inset-listener path (not just the
+    animation callback), preventing a grey gap on devices where
+    the animation callback is unreliable.
+  - `patches/@capacitor+android+8.3.0.patch`: patches Capacitor
+    core's built-in `SystemBars` plugin to stop applying
+    `imeInsets.bottom` as padding on the WebView parent.
+    Android's `adjustResize` already shrinks the content frame;
+    applying IME insets again double-subtracts the keyboard
+    height and leaves an ~800px grey band. See
+    Ionic forum post /251049/4 (vosecek).
+- `BottomSheet` viewport height sourced from
+  `window.visualViewport.height` (with `visualViewport.resize` +
+  `@capacitor/keyboard` show/hide events as re-read triggers).
+  The earlier `initialInnerHeight − keyboardHeight` computation
+  double-subtracted the nav bar.
+- Per-field `enterKeyHint` (`"next"` / `"done"` / `"go"` /
+  `"search"`) with Enter handlers that either advance focus to
+  the next field or submit the form. All submit buttons call a
+  shared `src/utils/keyboard.ts::dismissKeyboard()` helper that
+  blurs the active element and calls `Keyboard.hide()` on native.
+
+### Android hardware back button
+- LIFO handler stack (`src/utils/backButton.ts`) + React hook
+  (`src/hooks/useBackButton.ts`). Each open bottom sheet, side
+  menu, and confirm dialog pushes its close callback; back walks
+  the stack top-to-bottom and the first handler to return
+  anything but `false` absorbs the event.
+- `AppContent` has a base-of-stack handler that walks
+  sub-screens (settings / backup / buy / etc.) back to their
+  parent. On root (`home` / `wallet`), falls through to
+  `App.minimizeApp()` — same as pressing the Home button.
+- **Never** calls `App.exitApp()`: destroying the activity
+  mid-`BiometricPrompt` orphans the dialog in SystemUI with an
+  unresponsive Cancel button, forcing a device reboot to clear.
+  On `unlock` / `unlocking` screens, back is absorbed entirely.
+
+### Biometric-unlock stuck-state recovery
+- Native: `BiometricPromptAuth.runAuthenticate` checks
+  `activity.lifecycle.currentState.isAtLeast(STARTED)` before
+  calling `prompt.authenticate`, and wraps the call in a
+  try/catch for `IllegalStateException`. Without this guard,
+  pressing Home during the ~400ms delay between
+  `UnlockingPage` rendering and `retryUnlock` firing would leak
+  the FragmentManager exception, and the auth callback would
+  never fire — leaving the JS Promise hung and the app stuck on
+  `UnlockingPage` with no prompt visible.
+- JS: `useBreezSdk` subscribes to `App.appStateChange` from
+  `@capacitor/app` and re-fires `retryUnlock` when the app
+  returns to the foreground while `startupState` is still
+  `'native-unlocking'`. Guarded by `retryUnlockInFlightRef`
+  against concurrent invocation.
+- iOS: `KeychainSeedVault.retrieveSeed` now pre-checks
+  `LAContext.canEvaluatePolicy` before `SecItemCopyMatching` so
+  a user who denied the `NSFaceIDUsageDescription` permission
+  gets a targeted `BIOMETRIC_UNAVAILABLE` error instead of
+  silent `USER_CANCELLED`.
+
+---
+
+## Phase 4B: CI
+
+- GitHub Actions workflows for iOS + Android builds on every PR
+- Run `tsc`, `eslint`, unit tests, and a dry `cap sync` on the web
+  side
+- Android: `./gradlew :app:assembleDebug` against a JDK 21
+  runner; cache Gradle + the locally-published Spark SDK AAR
+- iOS: `xcodebuild -scheme App -destination generic/platform=iOS`
+  with `-allowProvisioningUpdates` off (CI uses a provisioning
+  profile checked in or managed via Fastlane `match`)
+- Signing: automatic certificate management via Fastlane `match`
+  with a private Git repo for the encrypted `.p12` + provisioning
+  profile store
+
+---
+
+## Phase 4C: Distribution
+
+- iOS: provisioning + Team ID pinned; Fastlane `pilot` to upload
+  to TestFlight on every merge to `main`
+- Android: Play Console internal-testing track; Fastlane `supply`
+  to upload the signed AAB from CI
+- Release automation: tag-triggered workflow that bumps the
+  `versionCode` / `buildVersion`, builds, uploads, and writes a
+  GitHub Release with the CI-produced IPA / AAB
+
+---
+
+## Phase 5: Push Notifications
+
+- Lightning address payment notifications via
+  `@capacitor/push-notifications`
+- Server-side: Breez address server or equivalent pushes to the
+  user's FCM / APNs token when a payment lands on their
+  `user@breez.tips` address
+- Client-side: notification channel / category configuration,
+  deep-link handling so tapping the notification opens the
+  payment detail in-app
 
 ---
 
@@ -209,19 +353,65 @@ App launch (native) → check native secure vault
 |-------|--------|-------|
 | 1. Repo + Scaffold | ✅ Complete | |
 | 2. Passkey Plugin | ✅ Complete | Merged in #1. E2E verified on iOS + Android. Depends on Spark SDK `pr/passkey-core`. |
-| 3. Native Secure Vault | ✅ Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix). Verified on Honor EML_L09 + iPhone 14 (iOS 26.3.1) + web. |
-| 4. Polish & Distribution | 🔜 Not Started | App icons, splash screen, CI, TestFlight / Play Store internal testing. |
+| 3. Native Secure Vault | ✅ Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix). |
+| 4A. App Polish | ✅ Complete | Branding + native shell + camera + native share / browser + soft keyboard + Android back button + biometric recovery. Verified on physical Android + iOS devices + web PWA. |
+| 4B. CI | 🔜 Not Started | GitHub Actions for iOS / Android builds. |
+| 4C. Distribution | 🔜 Not Started | TestFlight / Play Store internal testing. |
+| 5. Push Notifications | 🔜 Not Started | Lightning address payment notifications. |
 
-## Post-Phase-3 Follow-ups
+## Carry-overs for later phases
 
-Captured for context — tracked and prioritized in the Glow App roadmap.
+Captured for context — tracked and prioritized alongside the phase
+work above.
 
-### Still outstanding
+### Security / architecture
 
-- **Opaque-handle pattern across the Capacitor bridge** — the proper fix for the `loggingBehavior: 'none'` pin. Right now the seed still crosses the JS↔native bridge as plaintext at SDK connect time and at vault store time; the Capacitor logging config suppresses the bridge traces, but that pin is the only thing keeping plaintext out of system logs. The correct fix is to keep PRF entropy on the native side of `capacitor-passkey-prf` and expose only an opaque handle to JS, then have `capacitor-native-vault` accept that handle directly so the seed never round-trips through the bridge in plaintext. Cross-plugin change involving both in-house plugins plus glow-web's `passkeyService` and `useBreezSdk.connectWallet`. Bigger design pass before implementation — open questions around handle scoping, cleanup policy, and whether SDK connect can accept a handle directly.
+- **Opaque-handle pattern across the Capacitor bridge** — the proper
+  fix for the `loggingBehavior: 'none'` pin. Right now the seed still
+  crosses the JS↔native bridge as plaintext at SDK connect time and
+  at vault store time; the Capacitor logging config suppresses the
+  bridge traces, but that pin is the only thing keeping plaintext out
+  of system logs. The correct fix is to keep PRF entropy on the
+  native side of `capacitor-passkey-prf` and expose only an opaque
+  handle to JS, then have `capacitor-native-vault` accept that handle
+  directly so the seed never round-trips through the bridge in
+  plaintext. Cross-plugin change involving both in-house plugins plus
+  glow-web's `passkeyService` and `useBreezSdk.connectWallet`. Bigger
+  design pass before implementation — open questions around handle
+  scoping, cleanup policy, and whether SDK connect can accept a
+  handle directly.
 
-- **Publish the in-house Capacitor plugins as standalone packages** — both `capacitor-passkey-prf` and `capacitor-native-vault` currently live as `file:plugins/...` dependencies. Publishing would let other Breez SDK Spark users adopt them without vendoring, but requires a cleaner API surface (no glow-app-specific assumptions), npm release tooling, and ongoing maintenance commitment.
+- **Publish the in-house Capacitor plugins as standalone packages**
+  — both `capacitor-passkey-prf` and `capacitor-native-vault`
+  currently live as `file:plugins/...` dependencies. Publishing would
+  let other Breez SDK Spark users adopt them without vendoring, but
+  requires a cleaner API surface (no glow-app-specific assumptions),
+  npm release tooling, and ongoing maintenance commitment.
+
+- **Upstream the patch-package patches** — if
+  ionic-team/capacitor-keyboard#30 / PR #60 merges upstream, we can
+  drop `patches/@capacitor+keyboard+8.0.3.patch`. The Capacitor core
+  SystemBars IME-double-subtract fix is more opinionated — we patch
+  it to simply zero the IME padding, trusting `adjustResize` to do
+  the work, which may not be the upstream preference. File an issue
+  with the reproduction steps (the uiautomator dump showing the
+  553px WebView inside a 1356px parent) as a starting point.
 
 ### Optional UX improvements
 
-- **Onboarding double-biometric UX** — first-time onboarding shows 3-4 biometric prompts (passkey ceremony + secure-vault store). The "Enabling biometric unlock…" label helps contextualize the last one, but doesn't reduce the count. Two approaches if user feedback shows it's still confusing: lazy-binding migration (first store plain, promote on second launch) or an explicit opt-in "Enable biometric quick-unlock" setting.
+- **Onboarding double-biometric UX** — first-time onboarding shows
+  3–4 biometric prompts (passkey ceremony + secure-vault store). The
+  "Enabling biometric unlock…" label helps contextualize the last
+  one, but doesn't reduce the count. Two approaches if user feedback
+  shows it's still confusing: lazy-binding migration (first store
+  plain, promote on second launch) or an explicit opt-in "Enable
+  biometric quick-unlock" setting.
+
+- **Deep links** — `capacitor.config.ts` + `AndroidManifest.xml`
+  intent-filter / iOS Associated Domains for `bitcoin:` /
+  `lightning:` / `glow://` URL schemes so the app can be the default
+  handler for payment URLs. Pairs naturally with push notifications
+  (Phase 5).
+
+- **Haptics** — light taps on successful payment / QR scan / copy
+  via `@capacitor/haptics`.

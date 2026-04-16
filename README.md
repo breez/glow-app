@@ -6,7 +6,11 @@ Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA i
 - **Native passkey PRF** — biometric authentication via ASAuthorization (iOS) and CredentialManager (Android), since WebAuthn is unavailable in WebViews
 - **Native secure vault** — wallet seed stored in iOS Keychain / Android Keystore with biometric binding enforced by the OS, not just a JS-side gate. Adding a new Face ID / Touch ID / fingerprint enrollment voids the stored seed automatically
 - **Dedicated unlock screen** — cancelling the biometric prompt lands on a retry/abandon flow instead of dropping the user onto onboarding, where they could accidentally create a new passkey label and orphan the stored wallet
-- **Push notifications** (planned) — notifications for Lightning address payments
+- **Branded native shell** — app icons, splash screen, launch theme, system bar colors, safe-area-aware layout, and portrait orientation lock on iOS and Android
+- **Native camera for QR scanning** — CAMERA / NSCameraUsageDescription wired into the existing QR scanner dialog, with image-upload fallback if the user denies the permission
+- **Native share + in-app browser** — log export goes through the system share sheet via `@capacitor/share`, and Buy Bitcoin provider URLs open in Chrome Custom Tabs / SFSafariViewController via `@capacitor/browser` instead of navigating the app's WebView
+- **Soft keyboard and back-button polish** — proper keyboard resize on both platforms, per-field `enterKeyHint` action buttons, form submit retracts the keyboard, and the Android hardware back button dismisses open sheets / drawers / dialogs in LIFO order before falling through to "minimise the app"
+- **Push notifications** (planned, Phase 5) — notifications for Lightning address payments
 
 ## Architecture
 
@@ -68,4 +72,7 @@ See [PLAN.md](PLAN.md) for the full implementation plan and current status.
 | 1. Capacitor Scaffold | Complete | |
 | 2. Passkey PRF Plugin | Complete | Merged in #1 |
 | 3. Native Secure Vault | Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix) |
-| 4. Polish & Distribution | Not Started | App icons, splash screen, CI, TestFlight / Play Store internal testing |
+| 4A. App Polish | Complete | Icons, splash, launch theme, system bars, safe-area, portrait lock, camera permission, native share + in-app browser, soft keyboard resize + enterKeyHint + dismiss-on-submit, Android back-button stack, biometric-unlock stuck-state recovery |
+| 4B. CI | Not Started | GitHub Actions for iOS / Android builds |
+| 4C. Distribution | Not Started | TestFlight / Play Store internal testing |
+| 5. Push Notifications | Not Started | Lightning address payment notifications |
