@@ -1,0 +1,11 @@
+# Pinned spark-sdk commit that glow-app's build pipeline expects.
+#
+# The branch reference below is documentation only — CI checks out
+# the SHA directly. When you need to move glow-app onto a newer
+# spark-sdk commit, update the SHA on the last non-comment line
+# and commit the change. scripts/resolve-spark-sdk.sh reads only
+# the first non-comment, non-blank line as the SHA.
+#
+# Branch: pr/passkey-core (breez/spark-sdk)
+# Last verified: 2026-04-16
+d1a2cfd9f53a6c312548ab6ca50a744597d1cceb

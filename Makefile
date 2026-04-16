@@ -41,7 +41,7 @@ ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | aw
 
 # ---------- High-level targets ----------
 
-.PHONY: setup sdk sdk-ios sdk-android sdk-wasm web sync ios android deploy-ios deploy-android clean help assets
+.PHONY: setup resolve-sdk sdk sdk-ios sdk-android sdk-wasm web sync ios android deploy-ios deploy-android clean help assets
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -54,7 +54,10 @@ setup: ## Full first-time setup
 	$(MAKE) web
 	npx cap sync
 
-sdk: sdk-ios sdk-android sdk-wasm ## Build Spark SDK for all platforms
+resolve-sdk: ## Clone spark-sdk at the pinned SHA (or verify existing checkout matches)
+	./scripts/resolve-spark-sdk.sh
+
+sdk: resolve-sdk sdk-ios sdk-android sdk-wasm ## Build Spark SDK for all platforms
 
 web: ## Build glow-web with local SDK WASM package
 	cd glow-web && npm install $(SDK_WASM_TGZ) && npx vite build
@@ -133,6 +136,17 @@ _sdk-ios-package:
 	@echo "iOS SDK ready"
 
 sdk-android: ## Build Spark SDK for Android and publish to mavenLocal
+	@# Generate UniFFI Kotlin bindings + copy them into the gradle lib
+	@# module's sources. spark-sdk's gradle config does NOT do this
+	@# automatically — devs usually have the generated files from a
+	@# prior manual `make bindings-kotlin`, which is why local builds
+	@# succeed on a clean gradle cache but CI's cold build fails with
+	@# "Unresolved reference: breez_sdk_spark". Belongs upstream in
+	@# spark-sdk's Android gradle build; until then, do it here.
+	cd $(BINDINGS_DIR) && $(MAKE) bindings-kotlin
+	mkdir -p $(SDK_ANDROID_DIR)/lib/src/main/kotlin
+	cp -R $(BINDINGS_DIR)/ffi/kotlin/main/kotlin/. \
+		$(SDK_ANDROID_DIR)/lib/src/main/kotlin/
 	cd $(SDK_ANDROID_DIR) && ANDROID_HOME=$(ANDROID_HOME) \
 		./gradlew :lib:publishToMavenLocal -PlibraryVersion=$(SDK_MAVEN_VERSION)
 	@echo "Android SDK published to mavenLocal as breez_sdk_spark:bindings-android:$(SDK_MAVEN_VERSION)"
