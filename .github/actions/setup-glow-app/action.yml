@@ -1,0 +1,156 @@
+name: Setup glow-app
+description: >-
+  Shared pre-build setup: Node 22 + resolve and cache the Spark
+  SDK at the pinned commit from .spark-sdk-ref. Each job selects
+  only the SDK platforms it needs via the `platforms` input.
+  The calling job must run actions/checkout before using this
+  composite — GitHub can't load a local composite action's files
+  until the repo is checked out, so the checkout can't live here.
+
+inputs:
+  platforms:
+    description: >-
+      Comma-separated list of SDK platform targets to build on cache
+      miss. Valid values: wasm, android, ios. Example: "wasm,android".
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node 22 (Capacitor 8 requirement)
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: |
+          package-lock.json
+          glow-web/package-lock.json
+
+    - name: Read pinned spark-sdk SHA + normalized platform slug
+      id: sdk-sha
+      shell: bash
+      # The platform input can contain commas (e.g. "wasm,android"),
+      # which actions/cache@v4 rejects in cache keys. Swap commas for
+      # plus signs so the slug round-trips to a valid key while still
+      # distinguishing "wasm" from "wasm+android".
+      run: |
+        echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+        echo "platforms-slug=$(echo '${{ inputs.platforms }}' | tr ',' '+')" >> "$GITHUB_OUTPUT"
+
+    # Cache the *output artifacts* so the `make sdk-*` step below can
+    # be skipped entirely when the pinned SHA hasn't changed. The key
+    # includes the requested platforms so a wasm-only cache doesn't
+    # satisfy an ios-needing job.
+    - name: Cache Spark SDK output artifacts
+      id: sdk-artifacts-cache
+      uses: actions/cache@v4
+      with:
+        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
+        path: |
+          ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+          ../spark-sdk/crates/breez-sdk/bindings/langs/swift
+          ~/.m2/repository/breez_sdk_spark
+
+    # Resolve (clone or verify) the spark-sdk checkout. Cheap on cache
+    # hit (just verifies HEAD), a fresh clone on miss.
+    - name: Resolve spark-sdk checkout
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: ./scripts/resolve-spark-sdk.sh
+
+    # Second-line cache: Rust target/ directory for incremental
+    # rebuilds when the artifact cache missed but Cargo.lock is
+    # unchanged (e.g., cache eviction without a SDK bump).
+    - name: Rust compile cache (fallback on artifact-cache miss)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ../spark-sdk
+        key: ${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
+
+    # Toolchain pieces needed to build the SDK from source on a
+    # cold cache. The `make sdk-*` targets invoke cargo + wasm-pack
+    # + Gradle; the ubuntu runner is missing protoc / wasm-pack /
+    # wasm32 / cargo-ndk by default. Each install is gated on the
+    # platform(s) the job requested so web builds don't pay for
+    # Android toolchain setup.
+
+    # Use arduino/setup-protoc@v3 rather than apt-get / brew — the
+    # Ubuntu protobuf-compiler package does NOT include the
+    # well-known types (timestamp.proto, empty.proto, etc.) that
+    # the spark-sdk .proto files import. setup-protoc ships a
+    # statically-linked protoc with the WKTs baked in, works on
+    # both Linux and macOS.
+    - name: Install protoc (with well-known types)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      uses: arduino/setup-protoc@v3
+      with:
+        version: '25.x'
+        # Pass the workflow's default token so setup-protoc's
+        # GitHub release-info API calls are authenticated. Without
+        # this it hits the 60 req/hr unauthenticated rate limit
+        # (shared across all unauthenticated callers from the same
+        # runner IP), which on busy shared IPs lands instantly.
+        repo-token: ${{ github.token }}
+
+    - name: Install wasm-pack + wasm32 target (if WASM requested)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'wasm')
+      shell: bash
+      run: |
+        rustup target add wasm32-unknown-unknown
+        if ! command -v wasm-pack >/dev/null 2>&1; then
+          curl --retry 3 -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+        fi
+        wasm-pack --version
+
+    - name: Setup Android SDK + NDK (if android requested)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'android')
+      uses: android-actions/setup-android@v3
+      with:
+        cmdline-tools-version: 11076708
+        # Pre-accept licenses + install NDK 26 (matches what the
+        # spark-sdk Android Gradle build expects) in one shot,
+        # avoiding the `yes | sdkmanager` broken-pipe fragility.
+        packages: "ndk;26.1.10909125 build-tools;34.0.0 platform-tools"
+
+    - name: Expose ANDROID_NDK_HOME + install cargo-ndk + Android Rust targets
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'android')
+      shell: bash
+      run: |
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+        rustup target add aarch64-linux-android armv7-linux-androideabi \
+          i686-linux-android x86_64-linux-android
+        cargo install cargo-ndk --locked --version '^3'
+
+    - name: Install iOS Rust targets (if ios requested)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'ios')
+      shell: bash
+      run: |
+        rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+
+    - name: Build Spark SDK (cache miss only)
+      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        IFS=',' read -ra PLATFORMS <<< "${{ inputs.platforms }}"
+        for p in "${PLATFORMS[@]}"; do
+          p="$(echo "$p" | xargs)"
+          case "$p" in
+            wasm)    make sdk-wasm ;;
+            ios)     make sdk-ios ;;
+            android) make sdk-android ;;
+            "")      ;;
+            *)
+              echo "error: unknown platform '$p' (expected wasm, ios, or android)" >&2
+              exit 1
+              ;;
+          esac
+        done
+
+    - name: Report cache state
+      shell: bash
+      run: |
+        echo "SDK artifact cache hit: ${{ steps.sdk-artifacts-cache.outputs.cache-hit }}"
+        echo "Pinned SHA: ${{ steps.sdk-sha.outputs.sha }}"
+        echo "Requested platforms: ${{ inputs.platforms }}"
