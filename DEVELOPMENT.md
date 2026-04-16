@@ -61,10 +61,35 @@ Or step by step:
 git clone --recursive https://github.com/breez/glow-app.git
 cd glow-app
 
-# Clone Spark SDK alongside (sibling directory)
-git clone https://github.com/breez/spark-sdk.git ../spark-sdk
-cd ../spark-sdk && git checkout pr/passkey-core && cd ../glow-app
+# Materialize the pinned spark-sdk commit alongside (sibling dir).
+# Reads the SHA from .spark-sdk-ref and clones + checks out, or
+# verifies an existing ../spark-sdk checkout matches the pin.
+make resolve-sdk
 ```
+
+#### Bumping the spark-sdk pin
+
+`make resolve-sdk` is pinned to the exact commit recorded in
+`.spark-sdk-ref` at the glow-app repo root. When you need to
+move glow-app onto a newer spark-sdk commit:
+
+```bash
+# 1. Land the SDK change on its branch, note the new HEAD SHA.
+cd ../spark-sdk && git rev-parse HEAD
+
+# 2. Write it into the pin, commit in glow-app.
+cd ../glow-app
+echo "<new 40-char sha>" > .spark-sdk-ref
+git add .spark-sdk-ref
+git commit -m "chore(sdk): bump pin to <short-sha>"
+```
+
+CI keys its SDK artifact cache on `.spark-sdk-ref`, so the
+first run after a pin bump rebuilds the SDK; subsequent runs
+hit the cache. During local development on a new SDK branch,
+`SPARK_SDK_ALLOW_DRIFT=1 make resolve-sdk` bypasses the HEAD
+check so you can iterate without updating the pin on every
+SDK commit.
 
 ### 2. Environment variables
 
