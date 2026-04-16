@@ -31,14 +31,13 @@ permissions:
   contents: read
 
 jobs:
-  # Minimal job so the workflow is valid YAML at this commit. The
-  # real `web` / `android` / `ios` / `ios-preview` jobs land in
-  # subsequent commits and replace this one. Kept as a cheap
-  # smoke test against the composite action itself.
-  setup-smoke:
-    name: Setup smoke test
+  web:
+    name: Web (glow-web submodule)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20 min is cold-run headroom: the first run has to build the
+    # WASM SDK from source (~10 min) + install glow-web deps + run
+    # tsc/eslint/vitest. Warm runs with SDK cache hit are ~3 min.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,3 +46,36 @@ jobs:
       - uses: ./.github/actions/setup-glow-app
         with:
           platforms: wasm
+
+      - name: Install glow-web deps + local Spark SDK tgz
+        # The composite action restored the WASM tgz into
+        # ../spark-sdk/packages/wasm/. Resolve to an absolute path
+        # before `cd glow-web` — a relative `../spark-sdk/...` would
+        # resolve against the new PWD and land one directory off.
+        # `npm install <tgz>` overlays it on @breeztech/breez-sdk-spark
+        # without mutating the lockfile.
+        run: |
+          set -euo pipefail
+          TGZ="$(realpath ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz)"
+          echo "Installing local SDK: $TGZ"
+          cd glow-web
+          npm ci
+          npm install "$TGZ" --no-save
+
+      - name: Typecheck
+        run: cd glow-web && npx tsc --noEmit
+
+      - name: Lint
+        run: cd glow-web && npm run lint
+
+      - name: Unit tests
+        run: cd glow-web && npm run test
+
+      # Upload vitest coverage artifacts on failure for PR-page
+      # drilldown without needing a CI re-run.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: web-test-results
+          path: glow-web/coverage/**/*.json
+          retention-days: 7
