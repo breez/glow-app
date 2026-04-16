@@ -226,3 +226,86 @@ jobs:
           name: ios-build-log
           path: xcodebuild.log
           retention-days: 7
+
+  ios-preview:
+    name: iOS preview (Firebase App Distribution)
+    runs-on: macos-15
+    # Same cold-run budget as the `ios` job plus FAD upload time.
+    timeout-minutes: 60
+    # Tag-triggered (preview-* / rc-*) or manually dispatched.
+    # Does NOT run on every main push — the CI plan-tier analysis
+    # in plan-4b Step 10 assumes a maintainer-chosen cadence to
+    # stay inside Free/Pro/Team macOS-minute quotas.
+    if: >-
+      (github.event_name == 'push' && (
+        startsWith(github.ref, 'refs/tags/preview-') ||
+        startsWith(github.ref, 'refs/tags/rc-')
+      )) ||
+      github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+    env:
+      KEYCHAIN_PASSWORD: ${{ secrets.IOS_PREVIEW_KEYCHAIN_PASSWORD }}
+      P12_BASE64: ${{ secrets.IOS_PREVIEW_CERT_P12_BASE64 }}
+      P12_PASSWORD: ${{ secrets.IOS_PREVIEW_CERT_P12_PASSWORD }}
+      PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PREVIEW_PROFILE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,ios
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/App/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Import ad-hoc certificate + provisioning profile
+        run: ./scripts/ci/import-ios-ad-hoc-cert.sh
+
+      - name: Build glow-web dist/
+        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
+        # time — without it, SDK init fails on every launch and
+        # mnemonic-based onboarding can't even reach the wallet.
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      - name: Archive + export IPA
+        run: ./scripts/ci/build-ios-ipa.sh Debug
+
+      - name: Upload to Firebase App Distribution
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          groups: internal
+          releaseNotes: |
+            Trigger: ${{ github.ref_name }} (${{ github.event_name }})
+            Commit: ${{ github.sha }}
+            Message: ${{ github.event.head_commit.message || 'manual dispatch' }}
+          file: build/App.ipa
+
+      - name: Upload archive on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-preview-archive
+          path: build/App.xcarchive
+          retention-days: 7
