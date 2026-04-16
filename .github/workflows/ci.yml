@@ -146,3 +146,83 @@ jobs:
             android/app/build/reports/**/*
             android/build/reports/**/*
           retention-days: 7
+
+  ios:
+    name: iOS (xcodebuild, unsigned)
+    runs-on: macos-15
+    # 60 min cold-run headroom: iOS cross-compile is slower than
+    # Android (~15 min), plus xcodebuild itself (~10 min on a cold
+    # Pods cache). Warm runs with SDK + Pods cache hit are ~5 min.
+    timeout-minutes: 60
+    # Always run on main pushes and on preview / rc tags (so main
+    # status never drifts). On PRs, opt in via the 'run-ios' label
+    # to contain macOS-minute burn. Branch protection should be
+    # configured with "skipped = passing" so PRs without the label
+    # can still merge — see DEVELOPMENT.md#branch-protection.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ios')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,ios
+
+      - name: Select Xcode
+        # Pin Xcode to match local builds. macos-15 ships multiple
+        # Xcode versions; the pin avoids invalidation when GitHub
+        # rotates the default.
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/App/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
+          restore-keys: pods-
+
+      - name: Build glow-web dist/
+        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
+        # time — without it, SDK init fails on every launch and
+        # mnemonic-based onboarding can't even reach the wallet.
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      - name: xcodebuild (unsigned device build)
+        # Matches the local command in DEVELOPMENT.md. The three
+        # CODE_SIGN_* flags together make xcodebuild stop
+        # negotiating signing — Phase 4C wires signing back up for
+        # TestFlight.
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -destination 'generic/platform=iOS' \
+            -configuration Debug \
+            -allowProvisioningUpdates=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee xcodebuild.log
+
+      - name: Upload xcodebuild log on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-build-log
+          path: xcodebuild.log
+          retention-days: 7
