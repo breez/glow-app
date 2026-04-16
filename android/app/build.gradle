@@ -16,7 +16,30 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    // Sign debug builds with the committed android/debug.keystore
+    // rather than Gradle's auto-generated ~/.android/debug.keystore.
+    //
+    // Why: the com.breez.spark.glow.dev package has the SHA-256
+    // fingerprint of *this* specific keystore registered in
+    // keys.breez.technology/.well-known/assetlinks.json. Without
+    // a committed keystore, every fresh CI runner (and every new
+    // dev machine) signs with a different cert and breaks passkey
+    // auth — the RP can't validate the caller. Committing it is
+    // standard for private repos; debug keystores ship with
+    // well-known passwords ("android"/"android") and can only sign
+    // debug builds, not publishable releases.
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+        }
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

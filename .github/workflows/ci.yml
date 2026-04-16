@@ -79,3 +79,70 @@ jobs:
           name: web-test-results
           path: glow-web/coverage/**/*.json
           retention-days: 7
+
+  android:
+    name: Android (assembleDebug)
+    runs-on: ubuntu-latest
+    # 45 min is cold-run headroom: first run builds the WASM SDK
+    # (~10 min) + Android NDK install (~3 min) + Android AAR
+    # cross-compile (~5 min) + glow-web vite build (~3 min) +
+    # gradle assembleDebug (~5 min). Warm runs with SDK cache hit
+    # are ~8 min.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,android
+
+      - name: Setup JDK 21 (Capacitor 8 + AGP 8)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # Encrypts the Gradle configuration-cache across runs.
+          # Safe without the secret — the action falls back to a
+          # non-encrypted shared cache when omitted.
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Build glow-web dist/
+        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
+        # time — without it, SDK init fails on every launch and
+        # mnemonic-based onboarding can't even reach the wallet.
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (Android)
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        run: cd android && ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: glow-${{ github.sha }}-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+
+      # Failure-only upload of gradle / lint reports so the PR page
+      # has enough to diagnose without a CI re-run.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-build-logs
+          path: |
+            android/app/build/reports/**/*
+            android/build/reports/**/*
+          retention-days: 7
