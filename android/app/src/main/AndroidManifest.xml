@@ -15,6 +15,8 @@
             android:label="@string/title_activity_main"
             android:theme="@style/AppTheme.NoActionBarLaunch"
             android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize"
             android:exported="true">
 
             <intent-filter>
@@ -38,4 +40,10 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Camera is optional: the QR scanner falls back to image upload when
+         camera is unavailable, so the app should install on devices without
+         a camera (e.g., some tablets and automotive devices). -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 </manifest>
