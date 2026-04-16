@@ -29,7 +29,7 @@ ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | aw
 
 # ---------- High-level targets ----------
 
-.PHONY: setup sdk sdk-ios sdk-android sdk-wasm web sync ios android deploy-ios deploy-android clean help
+.PHONY: setup sdk sdk-ios sdk-android sdk-wasm web sync ios android deploy-ios deploy-android clean help assets
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -49,6 +49,14 @@ web: ## Build glow-web with local SDK WASM package
 
 sync: ## Copy web assets to native projects (without regenerating native configs)
 	npx cap copy
+
+assets: ## Regenerate native app icons and splash from glow-web/public/assets/Glow_Logo.png
+	node scripts/prepare-native-assets.mjs
+	npx capacitor-assets generate \
+		--iconBackgroundColor '#0a0a0f' \
+		--iconBackgroundColorDark '#0a0a0f' \
+		--splashBackgroundColor '#0a0a0f' \
+		--splashBackgroundColorDark '#0a0a0f'
 
 ios: web sync ## Build iOS app
 	xcodebuild -project ios/App/App.xcodeproj -scheme App \

@@ -24,3 +24,7 @@ android/local.properties
 Thumbs.db
 /plugins/capacitor-passkey-prf/.build
 /plugins/capacitor-native-vault/.build
+
+# @capacitor/assets emits PWA icon output at repo root even when --ios --android
+# flags are passed. We only use iOS + Android outputs; the PWA belongs to glow-web.
+/icons/

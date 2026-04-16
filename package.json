@@ -8,17 +8,29 @@
     "sync": "npx cap sync",
     "build": "npm run build:web && npm run sync",
     "open:ios": "npx cap open ios",
-    "open:android": "npx cap open android"
+    "open:android": "npx cap open android",
+    "postinstall": "patch-package"
   },
   "dependencies": {
     "@capacitor/android": "^8.3.0",
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.3",
     "@capacitor/cli": "^8.3.0",
     "@capacitor/core": "^8.3.0",
+    "@capacitor/filesystem": "^8.1.2",
     "@capacitor/ios": "^8.3.0",
+    "@capacitor/keyboard": "^8.0.3",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2",
+    "@capgo/capacitor-navigation-bar": "^8.1.3",
     "capacitor-native-vault": "file:plugins/capacitor-native-vault",
     "capacitor-passkey-prf": "file:plugins/capacitor-passkey-prf"
   },
   "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "patch-package": "^8.0.1",
+    "sharp": "^0.34.5",
     "typescript": "^6.0.2"
   }
 }
