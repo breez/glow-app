@@ -118,7 +118,143 @@ Do NOT set `VITE_CONSOLE_LOGGING=true` for production release builds.
 Tracked in `~/.claude/plans/delightful-sleeping-marshmallow.md`:
 
 - **Plaintext seeds across the Capacitor bridge**: even with `loggingBehavior: 'none'`, `NativeVault.storeSeed` still passes the JSON-encoded mnemonic through Capacitor's bridge as a plain method argument. The proper fix is an opaque-handle pattern: have `capacitor-passkey-prf` keep the PRF entropy on the native side and expose only an opaque handle to JS, then have `capacitor-native-vault` accept a passkey-derived handle directly so the seed never crosses the bridge in plaintext at all. Until that lands, the `loggingBehavior` config pin is the only thing keeping bridge traces out of system logs — defense-in-depth would make the config choice non-load-bearing.
-- **Logcat sanity check on Honor device**: re-grep `adb logcat` for "mnemonic" / "seed" / wallet words after a fresh Test 1 run to confirm the `loggingBehavior: 'none'` fix is actually working end-to-end. Was queued during STEP 3 device verification but the device disconnected before the check could run.
+- **Logcat sanity check on a debug Android build**: re-grep `adb logcat` for "mnemonic" / "seed" / wallet words after a fresh onboarding run to confirm the `loggingBehavior: 'none'` fix is working end-to-end. Was queued during Phase 3 device verification but interrupted before the check could run.
+
+## Phase 4A: App Polish
+
+Makes the Capacitor shell feel like a first-class native app. Ships on
+the `feat/phase-4a-app-polish` branch. See `PLAN.md` for the full
+feature-by-feature breakdown; this section is the architecture-level
+pointer list a maintainer needs to navigate the code.
+
+### Branding + native shell
+
+- **Native asset pipeline** — `scripts/prepare-native-assets.mjs`
+  (sharp) + `npx capacitor-assets generate` via `make assets`. Source
+  image: `glow-web/public/assets/Glow_Logo.png`. Regenerates every
+  Android mipmap + drawable density and every iOS AppIcon / Splash
+  slot. Adaptive icon background set to spark-void (`#0a0a0f`).
+- **Launch themes** — `android/app/src/main/res/values/styles.xml`
+  pins the pre-JS system bar theme dark so there's no flash of
+  default chrome before `main.tsx` runs the `StatusBar` plugin init.
+  `ios/App/App/Base.lproj/LaunchScreen.storyboard` hard-codes the
+  background to `#0a0a0f` instead of `systemBackgroundColor`, so
+  light-mode iOS devices don't flash white during launch.
+- **Orientation lock** — portrait-only on both platforms:
+  `android:screenOrientation="portrait"` in `AndroidManifest.xml`,
+  `UISupportedInterfaceOrientations` in `Info.plist`.
+
+### Capacitor plugins installed in this phase
+
+- `@capacitor/splash-screen`, `@capacitor/status-bar`,
+  `@capgo/capacitor-navigation-bar` — system bar styling
+- `@capacitor/keyboard` — soft keyboard resize + height events
+- `@capacitor/browser` — Chrome Custom Tabs / SFSafariViewController
+  for Buy Bitcoin provider URLs
+- `@capacitor/share` + `@capacitor/filesystem` — native share sheet
+  for log export
+- `@capacitor/app` — Android hardware back button events
+
+All configured and wired via `capacitor.config.ts` (with `loggingBehavior: 'none'` preserved from Phase 3).
+
+### Critical patches (`patch-package`, `postinstall`)
+
+Two node_modules patches that re-apply on every `npm install`:
+
+- **`patches/@capacitor+keyboard+8.0.3.patch`** — applies
+  [ionic-team/capacitor-keyboard#30](https://github.com/ionic-team/capacitor-keyboard/issues/30)
+  / [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60)
+  (unmerged upstream as of 2026-04-16). Makes the plugin's
+  `setOnApplyWindowInsetsListener` call
+  `possiblyResizeChildOfContent(showingKeyboard)` unconditionally,
+  so the FrameLayout is restored on keyboard-hide events that arrive
+  via the inset path (app switch, programmatic hide, symbol-keyboard
+  fluctuation) — not just via the animation callback. Without this,
+  the grey gap appears when the animation callback is unreliable on
+  a given device.
+
+- **`patches/@capacitor+android+8.3.0.patch`** — patches
+  `com.getcapacitor.plugin.SystemBars`'s inset listener to stop
+  applying `imeInsets.bottom` as padding on the WebView parent.
+  Android's `windowSoftInputMode="adjustResize"` already shrinks the
+  activity content frame to exclude the keyboard; applying IME
+  insets AGAIN as padding double-subtracts the keyboard height,
+  leaving the WebView roughly one-keyboard-height shorter than the
+  visible content area. Diagnosed via `adb shell uiautomator dump`:
+  the parent `ViewGroup` was correctly sized (1080×1356) but the
+  `WebView` child was shrunk to 1080×553 = parent − 803 ≈
+  imeInsets.bottom. See the Ionic forum thread at
+  /251049/4 (vosecek) for the root-cause analysis.
+
+### Android hardware back button
+
+- `src/utils/backButton.ts` in glow-web exposes a module-level LIFO
+  handler stack + a `pushBackButtonHandler(fn)` that lazily installs
+  the single `App.backButton` listener on first push.
+- `src/hooks/useBackButton.ts` is the React hook components use:
+  `useBackButton(dismiss, isOpen)` pushes while `isOpen` is true.
+- Wired into `BottomSheetContainer` (covers every sheet in the app),
+  `SideMenu` (drawer + nested logout confirm), `ConfirmDialog`
+  (generic confirms), and `AppContent` (screen-navigation fallback).
+- **Never calls `App.exitApp()`**. The fallthrough is
+  `App.minimizeApp()`. `exitApp` destroys the activity process mid
+  flight, and if a system-UI dialog (e.g. BiometricPrompt) is live
+  at the time, SystemUI keeps the dialog on screen as an orphan
+  with an unresponsive Cancel button that only a device reboot
+  clears. The fix is "never call exitApp from any code path".
+
+### Biometric unlock stuck-state recovery
+
+Protects against a race where the auto-triggered biometric lands on
+a non-STARTED activity (user pressed Home during the ~400ms delay
+between `UnlockingPage` rendering and `retryUnlock` firing):
+
+- **Native (Android)** — `BiometricPromptAuth.runAuthenticate` in
+  `plugins/capacitor-native-vault` checks
+  `activity.lifecycle.currentState.isAtLeast(STARTED)` before
+  calling `prompt.authenticate`, and wraps the call in a
+  try/catch for `IllegalStateException`. Without this,
+  `FragmentManager.commit` would throw, the auth callback would
+  never fire, and the JS Promise would hang forever.
+
+- **JS** — `useBreezSdk` subscribes to `App.appStateChange` from
+  `@capacitor/app` and re-fires `retryUnlock` when the app returns
+  to the foreground while `startupState === 'native-unlocking'`.
+  Guarded by `retryUnlockInFlightRef` against concurrent
+  invocation.
+
+- **iOS** — `KeychainSeedVault.retrieveSeed` now pre-checks
+  `LAContext.canEvaluatePolicy` before `SecItemCopyMatching` so a
+  user who denied the Face ID permission gets a targeted
+  `BIOMETRIC_UNAVAILABLE` error (mapped to a helpful message on
+  `UnlockPage`) instead of silent `USER_CANCELLED`.
+
+### Soft keyboard + back button UX in glow-web
+
+- `src/utils/keyboard.ts::dismissKeyboard()` — blurs the active
+  element and calls `Keyboard.hide()` on native as belt-and-braces.
+  Called from every submit handler (ContactsSubView Save,
+  AmountPanel Generate Invoice, InputStep Continue, AmountStep
+  Next).
+- `src/components/ui/forms/index.tsx` — `FormInput` forwards
+  `enterKeyHint`, `inputMode`, `autoCapitalize`, `autoCorrect`,
+  `autoComplete`, `spellCheck`, `autoFocus`, `name`, `inputRef`.
+- `src/components/ui/sheets/BottomSheet.tsx` — reads viewport
+  height from `window.visualViewport.height` instead of computing
+  `initialInnerHeight − keyboardHeight` from the plugin event.
+  The computation double-subtracted the nav bar and left a
+  ~128 physical-px gap; the visualViewport read is correct.
+
+### Standalone web compatibility
+
+Every native-only code path is guarded by
+`Capacitor.isNativePlatform()` or `Capacitor.getPlatform()` checks.
+`secureStorage.isSupported()` returns false on web, which means
+`UnlockingPage` / `UnlockPage` are never mounted in a web build.
+`useBackButton`, `useStatusBarColor`, `statusBarManager`,
+`dismissKeyboard` all no-op on web. Verified via dev server +
+Playwright (home, passkey home, mnemonic home, restore page all
+render with zero console errors).
 
 ## Key References
 
