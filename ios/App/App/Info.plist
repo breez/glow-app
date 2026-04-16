@@ -32,22 +32,24 @@
 	<array>
 		<string>armv7</string>
 	</array>
+	<!-- Portrait only on iPhone and iPad. The glow-web layout is
+	     designed and tested in portrait; landscape introduces
+	     responsive-layout issues (balance display collision,
+	     bottom-bar wrapping, QR scanner crop, etc.) that aren't
+	     worth addressing for a phone-first wallet app. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Authenticate with Face ID to access your wallet via passkey</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Glow uses the camera to scan Lightning and Bitcoin payment QR codes.</string>
 </dict>
 </plist>
