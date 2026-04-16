@@ -1,5 +1,7 @@
 # Glow App
 
+[![CI](https://github.com/breez/glow-app/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/breez/glow-app/actions/workflows/ci.yml)
+
 Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web) PWA.
 
 Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA in a native shell with:
@@ -10,6 +12,7 @@ Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA i
 - **Native camera for QR scanning** — CAMERA / NSCameraUsageDescription wired into the existing QR scanner dialog, with image-upload fallback if the user denies the permission
 - **Native share + in-app browser** — log export goes through the system share sheet via `@capacitor/share`, and Buy Bitcoin provider URLs open in Chrome Custom Tabs / SFSafariViewController via `@capacitor/browser` instead of navigating the app's WebView
 - **Soft keyboard and back-button polish** — proper keyboard resize on both platforms, per-field `enterKeyHint` action buttons, form submit retracts the keyboard, and the Android hardware back button dismisses open sheets / drawers / dialogs in LIFO order before falling through to "minimise the app"
+- **CI on every PR** — GitHub Actions builds the web + Android on every PR and iOS (label-gated) + preview builds on release tags, with Dependabot auto-updates. Preview builds go to Firebase App Distribution for stakeholder testing
 - **Push notifications** (planned, Phase 5) — notifications for Lightning address payments
 
 ## Architecture
@@ -73,6 +76,6 @@ See [PLAN.md](PLAN.md) for the full implementation plan and current status.
 | 2. Passkey PRF Plugin | Complete | Merged in #1 |
 | 3. Native Secure Vault | Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix) |
 | 4A. App Polish | Complete | Icons, splash, launch theme, system bars, safe-area, portrait lock, camera permission, native share + in-app browser, soft keyboard resize + enterKeyHint + dismiss-on-submit, Android back-button stack, biometric-unlock stuck-state recovery |
-| 4B. CI | Not Started | GitHub Actions for iOS / Android builds |
+| 4B. CI | Complete | GitHub Actions (`web` + `android` on every PR, `ios` label-gated, `ios-preview` on tags via Firebase App Distribution), Spark SDK pinned via `.spark-sdk-ref`, Dependabot auto-update PRs |
 | 4C. Distribution | Not Started | TestFlight / Play Store internal testing |
 | 5. Push Notifications | Not Started | Lightning address payment notifications |

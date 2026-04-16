@@ -256,6 +256,134 @@ Every native-only code path is guarded by
 Playwright (home, passkey home, mnemonic home, restore page all
 render with zero console errors).
 
+## Phase 4B: Continuous Integration
+
+Every PR to `main` runs through GitHub Actions. All Phase 4B
+work lives in `.github/` plus small accommodations in `Makefile`,
+`DEVELOPMENT.md`, and `scripts/`.
+
+### Spark SDK pinning
+
+- `.spark-sdk-ref` — plain text file at repo root containing the
+  pinned spark-sdk commit SHA. One SHA per line; `#` lines are
+  comments. Bump the SHA when glow-app needs a newer SDK commit
+  (normally in its own `chore(sdk):` commit).
+- `scripts/resolve-spark-sdk.sh` — idempotent. Clones spark-sdk
+  at the pin into `../spark-sdk/` when missing; verifies the
+  HEAD matches when present. `SPARK_SDK_ALLOW_DRIFT=1` bypasses
+  the verify for local SDK-side development. Exit 0 = ready,
+  exit 1 = drift detected.
+- `Makefile` exposes `make resolve-sdk`, and `make sdk` now
+  depends on it so fresh checkouts auto-clone the SDK.
+
+### CI workflows
+
+- `.github/workflows/ci.yml` — four jobs:
+  - `web` (ubuntu) — `tsc --noEmit` + `npm run lint` + `npm run
+    test` against the submodule's pinned SHA. Runs on every PR.
+  - `android` (ubuntu) — `gradle :app:assembleDebug`, uploads
+    the APK artifact (7d retention) + Gradle reports on failure.
+    Runs on every PR.
+  - `ios` (macos-15) — unsigned `xcodebuild` device build.
+    Label-gated on PRs via the `run-ios` label to contain
+    macOS-minute burn; always runs on `main` pushes, `preview-*`
+    / `rc-*` tags, and `workflow_dispatch`.
+  - `ios-preview` (macos-15) — ad-hoc signed IPA uploaded to
+    Firebase App Distribution. Tag-triggered (`preview-*` /
+    `rc-*`) + manually dispatchable. Not on every main push.
+- `.github/dependabot.yml` — weekly update PRs for npm (glow-app
+  root + glow-web + both in-house plugins), Gradle (Android),
+  and `github-actions`. `@capacitor/keyboard` and
+  `@capacitor/android` are ignored because bumping them without
+  re-validating the `patches/` files silently breaks keyboard
+  handling.
+
+A CodeQL code-scanning workflow is intentionally NOT shipped —
+CodeQL on private repos requires GitHub Advanced Security
+(GHAS), which isn't included in Breez-org's plan tier. Revisit
+if GHAS becomes available.
+
+### Shared setup: composite action
+
+`.github/actions/setup-glow-app/action.yml` wraps the steps
+every job shares: `actions/checkout@v4 --submodules`,
+`actions/setup-node@v4 --version 22`, and a two-layer SDK
+artifact cache:
+
+1. `actions/cache@v4` caches the **output artifacts** (iOS
+   xcframework + generated Swift sources,
+   `~/.m2/repository/breez_sdk_spark` for Android, and the
+   WASM tgz) keyed on `runner.os + platforms + SHA`. Cache
+   hit → `make sdk-*` is skipped entirely.
+2. `Swatinem/rust-cache@v2` as a second-line fallback keyed on
+   the same SHA; makes `target/` rebuilds incremental on
+   cache-miss cold runs.
+
+Jobs request the SDK platforms they need via the `platforms`
+input (e.g., `wasm` for `web`, `wasm,android` for the Android
+job).
+
+### iOS preview signing scripts
+
+Two bash scripts at `scripts/ci/` handle the ad-hoc signing
+the `ios-preview` job needs:
+
+- `import-ios-ad-hoc-cert.sh` — creates a temp keychain,
+  imports the base64-encoded `.p12` distribution cert,
+  installs the provisioning profile into
+  `~/Library/MobileDevice/Provisioning Profiles/`. Reads
+  three env vars: `P12_BASE64`, `P12_PASSWORD`,
+  `PROVISIONING_PROFILE_BASE64`.
+- `build-ios-ipa.sh` — `xcodebuild archive` +
+  `xcodebuild -exportArchive` with a `method=ad-hoc`
+  exportOptions.plist. Writes `build/App.ipa`.
+
+### PR-label gating for iOS
+
+The `ios` job's `if:` expression:
+
+```yaml
+if: >-
+  github.event_name == 'push' ||
+  github.event_name == 'workflow_dispatch' ||
+  contains(github.event.pull_request.labels.*.name, 'run-ios')
+```
+
+Skipped PRs show a "skipped" status, not "failed". Branch
+protection must be configured with "skipped = passing" so
+PRs without the label can still merge — see
+`DEVELOPMENT.md#branch-protection` for the exact settings.
+
+### Required secrets
+
+| Secret | Purpose |
+|--------|---------|
+| `GRADLE_ENCRYPTION_KEY` | Gradle config-cache encryption (optional) |
+| `FIREBASE_IOS_APP_ID` | Firebase App Distribution iOS app id |
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | Firebase service-account JSON |
+| `IOS_PREVIEW_KEYCHAIN_PASSWORD` | temp keychain unlock pw |
+| `IOS_PREVIEW_CERT_P12_BASE64` | ad-hoc distribution cert (.p12 → base64) |
+| `IOS_PREVIEW_CERT_P12_PASSWORD` | .p12 import passphrase |
+| `IOS_PREVIEW_PROFILE_BASE64` | ad-hoc provisioning profile (base64) |
+
+### Cost-sensitive choices
+
+macOS runners bill at 10x Linux on GitHub-hosted runners, so
+Phase 4B is structured to minimize macOS usage within the
+Breez-org's plan quota:
+
+- iOS PRs are **label-gated**.
+- iOS preview runs only on **preview-* tags** (and manual
+  dispatch), not on every main push.
+- Android + web run on ubuntu (1x).
+- DerivedData is NOT cached (invalidation is fragile); Pods
+  + `~/Library/Caches/CocoaPods` are.
+
+Expected total: ~6,900 billed minutes/month. Fits Enterprise
+Cloud easily; ~3,900-minute overage on Pro/Team at ~$30/mo
+if the numbers track the estimate. Escape hatches documented
+in plan-4b Step 10.
+
 ## Key References
 
 - Spark SDK PR #781 (`pr/passkey-core`) — native PRF provider implementations we reuse

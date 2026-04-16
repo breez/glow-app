@@ -202,6 +202,242 @@ make deploy-android   # build + install on connected Android device
 
 **WASM build fails with linked SDK**: `npm link` causes Vite polyfill resolution issues. Use the tgz install approach instead (`make web` handles this).
 
+## Continuous integration (Phase 4B)
+
+GitHub Actions runs on every PR and on pushes to `main`. Four
+jobs plus Dependabot update PRs:
+
+| Job | Runner | When it runs | What it does |
+|-----|--------|--------------|--------------|
+| `web` | ubuntu | every PR / main push | `tsc --noEmit` + `npm run lint` + `npm run test` against the pinned glow-web submodule SHA |
+| `android` | ubuntu | every PR / main push | `gradle :app:assembleDebug`; uploads `app-debug.apk` (7-day retention) |
+| `ios` | macos-15 | main pushes + PRs labelled `run-ios` | `xcodebuild` unsigned device build |
+| `ios-preview` | macos-15 | `preview-*` / `rc-*` tags + manual dispatch | Archive + export IPA, upload to Firebase App Distribution |
+
+Plus **Dependabot** (`.github/dependabot.yml`) — weekly npm
+(×4), Gradle, and `github-actions` update PRs.
+
+> **CodeQL code scanning**: intentionally not shipped. Code
+> scanning on private repos requires GitHub Advanced Security,
+> which isn't included in Breez-org's plan tier. Revisit if
+> GHAS becomes available.
+
+### Cutting a preview build
+
+iOS previews are distributed via Firebase App Distribution to
+the `internal` tester group. Triggers:
+
+```bash
+# Tag-based (recommended for scheduled drops)
+git tag preview-$(date +%Y%m%d)
+git push origin preview-$(date +%Y%m%d)
+
+# Or manual from the Actions UI:
+#   Actions → CI → Run workflow → main → ios-preview
+```
+
+After the run, invitees receive a FAD email with an install
+link. Delete one-off test tags afterwards to keep the release
+list clean: `git push origin :refs/tags/preview-test1`.
+
+### Running iOS on a PR
+
+Add the `run-ios` label (UI or `gh pr edit N --add-label run-ios`).
+Removing it mid-PR cancels the active run via concurrency. The
+`ios` job "skipped" status counts as passing for branch
+protection, so unlabelled PRs can still merge.
+
+### Bumping the Spark SDK pin
+
+The repo pins the spark-sdk commit in `.spark-sdk-ref`. CI keys
+its artifact cache on that SHA. To move onto a newer SDK
+commit:
+
+```bash
+# Land + push the SDK change, note the new HEAD SHA.
+echo "<40-char sha>" > .spark-sdk-ref
+git add .spark-sdk-ref
+git commit -m "chore(sdk): bump pin to <short-sha>"
+```
+
+For active SDK-side development without updating the pin on
+every commit: `SPARK_SDK_ALLOW_DRIFT=1 make resolve-sdk`.
+
+### Firebase setup
+
+glow-app uses the existing Breez Firebase project for ad-hoc
+iOS previews.
+
+| Thing | Value |
+|-------|-------|
+| Firebase project ID | `breez-technology` |
+| Project number | `463327817067` |
+| iOS app ("Glow Debug") — bundle ID | `com.breez.spark.glow.dev` |
+| iOS app — Firebase App ID (stored in `FIREBASE_IOS_APP_ID`) | `1:463327817067:ios:6a85ef20ff5f9860b2b02e` |
+| Android app ("Glow Debug") — package | `com.breez.spark.glow.dev` |
+| Android app — Firebase App ID (reserved for Phase 4C) | `1:463327817067:android:a89e8ebd1b81c7f1b2b02e` |
+| Tester group alias | `internal` |
+
+To reproduce or verify with `firebase-tools`:
+
+```bash
+firebase login
+firebase projects:list
+firebase apps:list --project breez-technology
+firebase apps:sdkconfig IOS 1:463327817067:ios:6a85ef20ff5f9860b2b02e \
+  --project breez-technology   # prints the GoogleService-Info plist
+```
+
+**Remaining one-time setup** (outside the CLI):
+
+1. **Service-account key**: Firebase console → Project Settings →
+   Service accounts → Generate new private key (JSON). Store
+   the raw JSON (not base64) as the `FIREBASE_SERVICE_ACCOUNT_KEY`
+   GitHub secret.
+2. **Add testers** to the `internal` group:
+   ```bash
+   firebase appdistribution:testers:add \
+     --project breez-technology \
+     --group-aliases internal \
+     tester1@example.com tester2@example.com
+   ```
+   Or via the Firebase console → App Distribution → Testers & Groups.
+
+### Required repository secrets
+
+Set via `gh secret set <NAME>` or the Settings → Secrets UI.
+
+| Secret | Used by | Purpose |
+|--------|---------|---------|
+| `VITE_BREEZ_API_KEY` | android, ios, ios-preview | Required. Breez SDK API key baked into the glow-web bundle at build time. Without it the SDK fails to init and mnemonic-based onboarding can't reach the wallet. Mirror the value from `glow-web/.env`. |
+| `GRADLE_ENCRYPTION_KEY` | android | Optional. Encrypts the Gradle configuration cache shared across runs. Falls back to unencrypted cache if unset. |
+| `FIREBASE_IOS_APP_ID` | ios-preview | Firebase App Distribution iOS app id (`1:NNNN:ios:HASH`). |
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | ios-preview | Firebase service-account JSON (raw, not base64). |
+| `IOS_PREVIEW_KEYCHAIN_PASSWORD` | ios-preview | Arbitrary string; unlocks the temp keychain on the CI runner. |
+| `IOS_PREVIEW_CERT_P12_BASE64` | ios-preview | Ad-hoc distribution cert (`.p12`) base64-encoded. `base64 -i cert.p12 \| pbcopy` on macOS. |
+| `IOS_PREVIEW_CERT_P12_PASSWORD` | ios-preview | `.p12` export passphrase (set when exporting from Keychain). |
+| `IOS_PREVIEW_PROFILE_BASE64` | ios-preview | Ad-hoc provisioning profile (`.mobileprovision`) base64-encoded. |
+
+### Android debug signing
+
+`android/debug.keystore` is a **shared project debug keystore**
+committed to the repo. It's explicitly NOT a secret — treat it
+the way you'd treat any public test fixture.
+
+Subject line (for identification):
+`CN=glow-app Shared Debug Keystore, O=Breez, C=US`
+
+Fingerprints:
+
+```
+SHA-1   : ED:85:05:FF:85:99:23:82:4F:5A:B6:75:1D:28:AF:8F:13:17:E5:D9
+SHA-256 : C8:55:12:70:A6:78:2F:1F:43:91:2F:0B:EF:F0:1F:AD:9F:54:23:67:
+          9C:9D:70:74:AE:74:F4:FD:E7:86:EE:43
+```
+
+Gradle's `signingConfigs.debug` in `android/app/build.gradle`
+points at this keystore, with the well-known debug credentials
+(`android` / `android`). Every build — local, CI, contributor
+checkout — signs with the same SHA-256, which is registered
+alongside `com.breez.spark.glow.dev` in
+`keys.breez.technology/.well-known/assetlinks.json` so passkey
+authentication works.
+
+**Why committing it is safe** (even when this repo goes public):
+
+- Debug keystores can only sign debug builds. They cannot push
+  an update over a Play-installed release build (different
+  cert + Play App Signing protect that boundary).
+- The release signing key lives in GitHub Actions secrets
+  (Phase 4C), never in the repo.
+- The real attack gate is "can the attacker get their APK onto
+  a victim's device?" — not "can the attacker reproduce the
+  debug signature?" Android App Links + passkeys bind
+  `RP domain + package name + signing cert`; anyone cloning
+  the repo can build an APK with the same cert, but to exploit
+  the passkey flow they'd also need a victim who sideloads
+  their clone.
+- This is the canonical convention. Prior art:
+  [CoreProc/android-debug-keystore](https://github.com/CoreProc/android-debug-keystore),
+  Google's own [App Links verification guide](https://developer.android.com/training/app-links/verify-android-applinks)
+  (recommends listing debug + release fingerprints
+  comma-separated in assetlinks), and most OSS Android /
+  Capacitor / React Native repos that ship a checked-in debug
+  keystore for exactly this reason.
+
+**Rotating the keystore**: if this keystore ever needs to
+change (e.g. stronger algorithm, expiry, one-off incident):
+
+1. Generate a new keystore:
+   ```bash
+   keytool -genkey -v \
+     -keystore android/debug.keystore \
+     -storepass android -alias androiddebugkey -keypass android \
+     -keyalg RSA -keysize 2048 -validity 36500 \
+     -dname "CN=glow-app Shared Debug Keystore, O=Breez, C=US"
+   ```
+2. Extract the new SHA-256:
+   ```bash
+   keytool -list -v -keystore android/debug.keystore \
+     -alias androiddebugkey -storepass android | grep SHA256
+   ```
+3. **Add** (don't replace) the new fingerprint to the
+   `com.breez.spark.glow.dev` entry in
+   `keys.breez.technology/.well-known/assetlinks.json`.
+   Keep the old fingerprint live for a grace period so
+   devs with older checkouts can still authenticate.
+4. After the grace period and all installs have picked up
+   the new APK, the old fingerprint can be removed from
+   assetlinks.
+
+## Branch protection (Phase 4B)
+
+Configure on `main` via Settings → Branches → Branch protection
+rules → Add rule (pattern: `main`):
+
+- **Require pull request reviews before merging**: 1 approval;
+  dismiss stale approvals on new commits.
+- **Require status checks to pass before merging**:
+  - `Web (glow-web submodule)`
+  - `Android (assembleDebug)`
+  - `iOS (xcodebuild, unsigned)` — **skipped = passing**
+    (label-gated, so docs-only / web-only PRs skip without
+    blocking merge).
+- **Require branches to be up to date before merging**.
+- **Require conversation resolution before merging**.
+- **Restrict who can push to `main`**: maintainers only.
+- **Do not allow bypassing the above settings**.
+
+Reproducible via `gh api --method PUT`:
+
+```bash
+gh api \
+  --method PUT \
+  -H "Accept: application/vnd.github+json" \
+  repos/breez/glow-app/branches/main/protection \
+  --input - <<'JSON'
+{
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "Web (glow-web submodule)",
+      "Android (assembleDebug)",
+      "iOS (xcodebuild, unsigned)"
+    ]
+  },
+  "enforce_admins": true,
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": true,
+    "required_approving_review_count": 1
+  },
+  "restrictions": null,
+  "required_conversation_resolution": true,
+  "allow_force_pushes": false,
+  "allow_deletions": false
+}
+JSON
+```
+
 ---
 
 <details>
