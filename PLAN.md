@@ -306,19 +306,115 @@ devices plus the standalone web PWA build.
 
 ---
 
-## Phase 4B: CI
+## Phase 4B: Continuous Integration
 
-- GitHub Actions workflows for iOS + Android builds on every PR
-- Run `tsc`, `eslint`, unit tests, and a dry `cap sync` on the web
-  side
-- Android: `./gradlew :app:assembleDebug` against a JDK 21
-  runner; cache Gradle + the locally-published Spark SDK AAR
-- iOS: `xcodebuild -scheme App -destination generic/platform=iOS`
-  with `-allowProvisioningUpdates` off (CI uses a provisioning
-  profile checked in or managed via Fastlane `match`)
-- Signing: automatic certificate management via Fastlane `match`
-  with a private Git repo for the encrypted `.p12` + provisioning
-  profile store
+Every PR to `main` runs through GitHub Actions on `breez/glow-app`.
+A red status check blocks merge.
+
+### Spark SDK pinning
+
+- `.spark-sdk-ref` at the repo root pins the exact spark-sdk
+  commit SHA. `scripts/resolve-spark-sdk.sh` clones the pinned
+  SHA into `../spark-sdk/` (or verifies an existing checkout
+  matches). `SPARK_SDK_ALLOW_DRIFT=1` bypasses the verify for
+  local SDK-side development.
+- `Makefile` exposes `make resolve-sdk`; `make sdk` now depends
+  on it so a fresh checkout auto-materializes the SDK.
+- CI keys its SDK artifact cache on the pinned SHA — first run
+  after a bump rebuilds the SDK, subsequent runs hit the cache
+  (~2–3 min vs. ~20 min cold).
+
+### CI jobs
+
+Four jobs under `.github/workflows/ci.yml` plus a composite
+action `.github/actions/setup-glow-app/action.yml` that each
+job reuses:
+
+- **`web` (ubuntu, always)** — `npx tsc --noEmit`, `npm run
+  lint`, `npm run test` against the glow-web submodule SHA
+  pinned by the PR head. Overlays the locally-built Spark SDK
+  WASM tgz via `npm install <tgz> --no-save`. Vitest JSON
+  coverage uploaded on failure.
+- **`android` (ubuntu, always)** — `gradle :app:assembleDebug`
+  with `gradle/actions/setup-gradle@v4` caching. Uploads
+  `app-debug.apk` (7-day retention); dumps
+  `android/app/build/reports/**` on failure.
+- **`ios` (macos-15, label-gated on PRs, always on main)** —
+  unsigned `xcodebuild` device build with `CODE_SIGNING_*`
+  disabled. PR jobs skipped unless the `run-ios` label is
+  applied; branch protection treats skips as passing.
+  CocoaPods cached keyed on `Podfile.lock`; DerivedData is
+  NOT cached (invalidation is fragile).
+- **`ios-preview` (macos-15, preview-* / rc-* tags +
+  `workflow_dispatch`)** — ad-hoc signed IPA via
+  `xcodebuild archive` + `-exportArchive`, uploaded to the
+  existing Breez Firebase project's App Distribution. Two
+  helper scripts under `scripts/ci/`:
+  `import-ios-ad-hoc-cert.sh` sets up a temp keychain and
+  imports the base64-encoded `.p12` + provisioning profile;
+  `build-ios-ipa.sh` runs the archive + export.
+
+### Dependabot
+
+- `.github/dependabot.yml` — weekly PRs for npm (glow-app root
+  + glow-web + both in-house plugins), Gradle (Android), and
+  `github-actions`. `@capacitor/keyboard` and
+  `@capacitor/android` are ignored so auto-bumps don't
+  silently break the `patches/` files.
+
+CodeQL code scanning was initially scoped into Phase 4B but
+dropped at implementation time — code scanning on private
+repos requires GitHub Advanced Security (GHAS), which isn't
+included in Breez-org's plan tier. Revisit if GHAS becomes
+available; scaffolding removed from the repo until then.
+
+### Workflow metadata
+
+- `concurrency: cancel-in-progress` on the PR / branch ref so
+  superseded runs don't burn minutes.
+- `paths-ignore` on `**.md` + `docs/**` + PR / issue templates
+  so doc-only PRs skip the full matrix.
+- `permissions: contents: read` as the workflow-level default;
+  `ios-preview` keeps the same, and all secret access is
+  scoped per-job.
+- `macos-15` pinned explicitly (not `-latest`) to avoid GitHub
+  runner rotations invalidating caches. Xcode 16 pinned via
+  `xcode-select` in the `ios` job.
+
+### Firebase App Distribution (iOS preview)
+
+Reuses the existing Breez Firebase project. Trigger via tag:
+
+```bash
+git tag preview-$(date +%Y%m%d)
+git push origin preview-$(date +%Y%m%d)
+```
+
+Or manually from the Actions UI (`workflow_dispatch`).
+Invitees receive an FAD email with an install link. Not tied
+to every main push to stay within Free/Pro/Team macOS-minute
+quotas.
+
+### Cost-sensitive structure
+
+macOS billing is 10x Linux. Back-of-envelope target: ~6,900
+billed minutes/month:
+
+- main pushes: ~20/mo × 15 min × 10 = 3,000
+- labelled PRs: ~10/mo × 15 min × 10 = 1,500
+- preview tags: ~4/mo × 15 min × 10 = 600
+- linux (web + android): ~1,000
+
+Fits Enterprise Cloud's 50,000 minutes easily; ~$30/mo overage
+on Pro/Team if the numbers track. Escape hatches documented
+in `DEVELOPMENT.md` and `~/.claude/plans/glow-app-phase-4b.md`.
+
+### Branch protection
+
+Required status checks: `web`, `android`, `ios` (skipped =
+passing), plus 1 PR approval + up-to-date-with-main +
+conversation-resolution. Restrictions + `gh api` reproduction
+documented in `DEVELOPMENT.md#branch-protection`.
 
 ---
 
@@ -355,8 +451,8 @@ devices plus the standalone web PWA build.
 | 2. Passkey Plugin | ✅ Complete | Merged in #1. E2E verified on iOS + Android. Depends on Spark SDK `pr/passkey-core`. |
 | 3. Native Secure Vault | ✅ Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix). |
 | 4A. App Polish | ✅ Complete | Branding + native shell + camera + native share / browser + soft keyboard + Android back button + biometric recovery. Verified on physical Android + iOS devices + web PWA. |
-| 4B. CI | 🔜 Not Started | GitHub Actions for iOS / Android builds. |
-| 4C. Distribution | 🔜 Not Started | TestFlight / Play Store internal testing. |
+| 4B. CI | ✅ Complete | GitHub Actions (`web` + `android` on every PR, `ios` label-gated, `ios-preview` on tags via Firebase App Distribution), Spark SDK pinned via `.spark-sdk-ref` + `scripts/resolve-spark-sdk.sh`, Dependabot (npm × 4 + gradle + actions). Branch protection enforces `web` / `android` / `ios` as required checks. CodeQL code scanning deferred (requires GitHub Advanced Security, not in current plan tier). |
+| 4C. Distribution | 🔜 Not Started | TestFlight / Play Store internal testing. Also: share iOS archive between `ios` and `ios-preview`, Android Firebase App Distribution, self-hosted Mac runner if cost matters. |
 | 5. Push Notifications | 🔜 Not Started | Lightning address payment notifications. |
 
 ## Carry-overs for later phases
