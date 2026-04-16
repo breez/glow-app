@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Deepest canvas color. Used as the adaptive icon background,
+         the splash fill, and the system bar color in the pre-JS
+         AppTheme.NoActionBarLaunch / AppTheme.NoActionBar themes so
+         the status and navigation bars match the splash canvas at
+         cold launch. Mirrors the spark.void token in glow-web's
+         tailwind.config.js.
+
+         Once JS boots, glow-web's statusBarManager takes over and
+         pushes per-page tints (spark_surface, the wallet page glass
+         effective color, etc.) at runtime via @capacitor/status-bar
+         and @capgo/capacitor-navigation-bar. -->
+    <color name="spark_void">#0a0a0f</color>
+
+    <!-- App surface color. Mirrors the spark.surface token in
+         tailwind.config.js. Used for the solid surface backgrounds
+         behind headers on SlideInPage / PageLayout. -->
+    <color name="spark_surface">#151520</color>
+</resources>

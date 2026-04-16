@@ -52,6 +52,39 @@ const config: CapacitorConfig = {
       'Cross-Origin-Opener-Policy': 'same-origin',
     },
   },
+  plugins: {
+    SplashScreen: {
+      // Capacitor 4+ wires this into Android 12's Theme.SplashScreen API via
+      // androidx.core:core-splashscreen (already a dependency in
+      // android/app/build.gradle) and onto iOS's LaunchScreen.storyboard.
+      launchShowDuration: 2000,
+      launchAutoHide: true,
+      launchFadeOutDuration: 200,
+      backgroundColor: '#0a0a0f',
+      androidSplashResourceName: 'splash',
+      androidScaleType: 'CENTER_CROP',
+      showSpinner: false,
+      splashFullScreen: true,
+      splashImmersive: true,
+    },
+    Keyboard: {
+      // Route WebView resize through both Android's native
+      // `windowSoftInputMode=adjustResize` (set on MainActivity) AND
+      // the plugin's own FrameLayout hack. Together they cover both
+      // the framework happy path and the animation-callback-missed
+      // edge cases (app switch, programmatic hide, symbol-keyboard
+      // fluctuation) where adjustResize alone leaves a gap.
+      //
+      // `resizeOnFullScreen: true` enables the plugin's backup path,
+      // which is only safe because we locally patch the plugin via
+      // patches/@capacitor+keyboard+8.0.3.patch to apply
+      // ionic-team/capacitor-keyboard#30 / PR #60 (unmerged upstream).
+      // Without that patch the plugin would fail to restore the
+      // FrameLayout height on keyboard hide.
+      resize: 'native',
+      resizeOnFullScreen: true,
+    },
+  },
 };
 
 export default config;
