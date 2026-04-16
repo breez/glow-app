@@ -1,0 +1,46 @@
+diff --git a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
+index c84923c..58fc538 100644
+--- a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
++++ b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
+@@ -181,8 +181,22 @@ public class SystemBars extends Plugin {
+             boolean keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime());
+ 
+             if (shouldPassthroughInsets) {
+-                // We need to correct for a possible shown IME
+-                v.setPadding(0, 0, 0, keyboardVisible ? imeInsets.bottom : 0);
++                // PATCH (glow-app): do NOT add IME bottom padding.
++                // Android's windowSoftInputMode=adjustResize already
++                // shrinks the activity content frame to exclude the
++                // keyboard, so applying imeInsets.bottom as padding on
++                // the WebView parent double-subtracts the keyboard
++                // height and leaves the WebView shorter than the
++                // visible content area (grey gap above the keyboard).
++                // glow-web listens to visualViewport + 100dvh to size
++                // its own layout; it doesn't need IME padding applied
++                // to the native parent.
++                //
++                // See ionic-team/capacitor-keyboard#30 and ionic forum
++                // post /251049/4 (vosecek): "Applying IME margins
++                // resizes the WebView, which causes Chromium to
++                // invalidate the input connection."
++                v.setPadding(0, 0, 0, 0);
+ 
+                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM && hasViewportCover && insetHandlingEnabled) {
+                     Insets safeAreaInsets = calcSafeAreaInsets(insets);
+@@ -202,12 +216,14 @@ public class SystemBars extends Plugin {
+                     .build();
+             }
+ 
+-            // We need to correct for a possible shown IME
++            // PATCH (glow-app): same double-subtraction fix as the
++            // shouldPassthroughInsets branch above. Pad for the
++            // system nav bar only; adjustResize handles the keyboard.
+             v.setPadding(
+                 systemBarsInsets.left,
+                 systemBarsInsets.top,
+                 systemBarsInsets.right,
+-                keyboardVisible ? imeInsets.bottom : systemBarsInsets.bottom
++                systemBarsInsets.bottom
+             );
+ 
+             // Returning `WindowInsetsCompat.CONSUMED` breaks recalculation of safe area insets
