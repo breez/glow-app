@@ -18,8 +18,13 @@ android {
         applicationId "technology.breez.glow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // versionCode + versionName are env-driven on tag-triggered
+        // CI runs (see scripts/ci/compute-version.sh — derives both
+        // from the release-X.Y.Z tag + GITHUB_RUN_NUMBER). Local
+        // builds without the envs fall back to a 0.0.0-dev marker
+        // so it's obvious which builds came from the tag pipeline.
+        versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
+        versionName System.getenv('VERSION_NAME') ?: '0.0.0-dev'
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
