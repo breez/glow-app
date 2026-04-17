@@ -4,7 +4,17 @@ android {
     namespace = "technology.breez.glow"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.breez.spark.glow.dev"
+        // Base applicationId — `release` buildType ships this unchanged
+        // as `technology.breez.glow`. `debug` buildType appends `.dev`
+        // via `applicationIdSuffix ".dev"` below, so debug APKs get
+        // `technology.breez.glow.dev` without any flavor plumbing.
+        // Both IDs are registered on the Apple Developer portal for
+        // iOS parity; the debug keystore SHA is in
+        // keys.breez.technology/.well-known/assetlinks.json under
+        // `technology.breez.glow.dev`; the Play-rewritten release
+        // cert SHA lands under `technology.breez.glow` after first
+        // Play App Signing enrollment.
+        applicationId "technology.breez.glow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -19,7 +29,7 @@ android {
     // Sign debug builds with the committed android/debug.keystore
     // rather than Gradle's auto-generated ~/.android/debug.keystore.
     //
-    // Why: the com.breez.spark.glow.dev package has the SHA-256
+    // Why: the technology.breez.glow.dev package has the SHA-256
     // fingerprint of *this* specific keystore registered in
     // keys.breez.technology/.well-known/assetlinks.json. Without
     // a committed keystore, every fresh CI runner (and every new
@@ -38,6 +48,12 @@ android {
     }
     buildTypes {
         debug {
+            // Debug builds get `.dev` appended: applicationId becomes
+            // `technology.breez.glow.dev`. The suffix also cascades
+            // into ResourceProvider authorities, DYNAMIC_RECEIVER_NOT_
+            // EXPORTED_PERMISSION, etc., so debug + release can
+            // install side-by-side on the same device.
+            applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
         }
         release {

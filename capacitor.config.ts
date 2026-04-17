@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.breez.spark.glow',
+  appId: 'technology.breez.glow',
   appName: 'Glow',
   webDir: 'glow-web/dist',
   // SECURITY: pin Capacitor's bridge logging to "none" in every build.
