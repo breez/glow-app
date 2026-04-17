@@ -36,8 +36,14 @@ CERT_PATH="$RUNNER_TEMP/distribution.p12"
 PROFILE_PATH="$RUNNER_TEMP/glow-preview.mobileprovision"
 
 echo "==> Decoding cert + profile"
-echo -n "$P12_BASE64" | base64 --decode --output "$CERT_PATH"
-echo -n "$PROVISIONING_PROFILE_BASE64" | base64 --decode --output "$PROFILE_PATH"
+# Strip any whitespace (newlines, spaces, tabs) before decoding —
+# base64 output from macOS `base64 -i file` wraps at 76 chars, and
+# GitHub secret storage may introduce LF/CRLF on set. BSD's
+# `base64 --decode --output` errors with "failed to decode message"
+# on whitespace-contaminated input. Stripping first is safe: valid
+# base64 only uses [A-Za-z0-9+/=].
+printf '%s' "$P12_BASE64" | tr -d '[:space:]' | base64 --decode --output "$CERT_PATH"
+printf '%s' "$PROVISIONING_PROFILE_BASE64" | tr -d '[:space:]' | base64 --decode --output "$PROFILE_PATH"
 
 echo "==> Creating temp keychain"
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
