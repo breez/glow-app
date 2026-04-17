@@ -31,9 +31,68 @@ permissions:
   contents: read
 
 jobs:
+  # Detect which parts of the repo changed in this PR so we can skip
+  # the irrelevant Ubuntu builds. Cuts roughly half of Dependabot CI
+  # time (a gradle-only bump doesn't need the web job; an npm-only
+  # bump doesn't need the android job) and the same on real PRs
+  # that touch only one side.
+  #
+  # On `push` events (main + tags) every downstream job runs
+  # unconditionally — path filtering is PR-only, treat main as the
+  # full-coverage channel.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.event_name == 'pull_request'
+    # dorny/paths-filter calls the GitHub API's pulls.listFiles to
+    # compute the changed-path set for a pull_request event. The
+    # top-level `permissions: contents: read` doesn't cover that;
+    # add the scoped read here. Scoped to this job only so the
+    # downstream jobs can't abuse the elevated token.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      web: ${{ steps.filter.outputs.web }}
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            web:
+              - 'glow-web/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'plugins/**'
+              - 'capacitor.config.ts'
+              - '.github/workflows/**'
+              - '.github/actions/**'
+            android:
+              - 'android/**'
+              - 'package.json'
+              - 'package-lock.json'
+              - 'plugins/**'
+              - 'capacitor.config.ts'
+              - '.github/workflows/**'
+              - '.github/actions/**'
+              - 'scripts/**'
+              - 'Makefile'
+
   web:
     name: Web (glow-web submodule)
     runs-on: ubuntu-latest
+    needs: changes
+    # Run on: any non-PR event (main pushes, tag pushes, manual
+    # dispatch), OR on a PR where glow-web / npm root / plugin /
+    # shared CI paths changed. Skipped = passing per branch
+    # protection config (documented in DEVELOPMENT.md#branch-protection).
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.web == 'true')
     # 20 min is cold-run headroom: the first run has to build the
     # WASM SDK from source (~10 min) + install glow-web deps + run
     # tsc/eslint/vitest. Warm runs with SDK cache hit are ~3 min.
@@ -83,6 +142,11 @@ jobs:
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
+    needs: changes
+    if: >-
+      !cancelled() &&
+      (github.event_name != 'pull_request' ||
+       needs.changes.outputs.android == 'true')
     # 45 min is cold-run headroom: first run builds the WASM SDK
     # (~10 min) + Android NDK install (~3 min) + Android AAR
     # cross-compile (~5 min) + glow-web vite build (~3 min) +
