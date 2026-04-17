@@ -105,7 +105,7 @@ jobs:
           java-version: '21'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           # Encrypts the Gradle configuration-cache across runs.
           # Safe without the secret — the action falls back to a
