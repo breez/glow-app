@@ -1,0 +1,81 @@
+default_platform(:ios)
+
+# Phase 4C — TestFlight upload pipeline.
+#
+# Signing + build happen via scripts/ci/import-ios-cert.sh +
+# scripts/ci/build-ios-ipa.sh (same pattern as Phase 4B's ios-preview
+# ad-hoc flow). Fastlane is used ONLY for upload_to_testflight — it
+# handles the auth dance (API key OR legacy Apple ID) and the ASC
+# changelog update post-upload, which altool/transporter don't.
+#
+# AUTH MODE: dual-path. Auto-selects the first available:
+#
+#   1. App Store Connect API key (.p8) — preferred, stable on CI,
+#      no 2FA. Used when APP_STORE_CONNECT_API_KEY_ID,
+#      APP_STORE_CONNECT_API_ISSUER_ID, APP_STORE_CONNECT_API_KEY_BASE64
+#      are all set and non-empty.
+#
+#   2. Legacy Apple ID + app-specific password — fallback for teams
+#      without ASC Admin access (App Manager can't create ASC API
+#      keys). Used when FASTLANE_USER + FASTLANE_PASSWORD are set.
+#      Optional FASTLANE_SESSION (2FA session cookie) needed for
+#      changelog updates on 2FA-protected Apple IDs. Generate locally
+#      via `fastlane spaceauth -u <email>`; expires every few weeks.
+#
+# Expected env vars for upload:
+#   RELEASE_NOTES (optional) — git-log derived changelog (Step 9)
+#
+# Expected working files:
+#   build/App.ipa — produced by build-ios-ipa.sh before this lane runs
+
+# GitHub Actions renders unset `secrets.*` values as empty strings,
+# which are truthy in Ruby. Helper — treat "" as absent alongside nil.
+def env_present?(key)
+  v = ENV[key]
+  !v.nil? && !v.empty?
+end
+
+platform :ios do
+  desc "Upload the pre-built Release IPA to TestFlight"
+  lane :upload do
+    api_key = nil
+    if env_present?("APP_STORE_CONNECT_API_KEY_ID") && env_present?("APP_STORE_CONNECT_API_ISSUER_ID") && env_present?("APP_STORE_CONNECT_API_KEY_BASE64")
+      UI.message("Using App Store Connect API key auth (preferred).")
+      api_key = app_store_connect_api_key(
+        key_id: ENV.fetch("APP_STORE_CONNECT_API_KEY_ID"),
+        issuer_id: ENV.fetch("APP_STORE_CONNECT_API_ISSUER_ID"),
+        key_content: ENV.fetch("APP_STORE_CONNECT_API_KEY_BASE64"),
+        is_key_content_base64: true,
+      )
+    elsif env_present?("FASTLANE_USER") && env_present?("FASTLANE_PASSWORD")
+      UI.message("Using legacy Apple ID + app-specific password auth (fallback).")
+      # fastlane auto-reads FASTLANE_USER / FASTLANE_PASSWORD /
+      # FASTLANE_SESSION env vars for upload_to_testflight.
+    else
+      UI.user_error!(
+        "No App Store Connect auth configured. Set either " \
+        "APP_STORE_CONNECT_API_KEY_ID/ISSUER_ID/KEY_BASE64 (preferred) " \
+        "or FASTLANE_USER/FASTLANE_PASSWORD (legacy fallback)."
+      )
+    end
+
+    # Accept IPA_PATH from env (CI passes an absolute path from
+    # $GITHUB_WORKSPACE/build/App.ipa since build-ios-ipa.sh writes
+    # to repo-root build/, not ios/App/build/). Local invocation
+    # from ios/App/ defaults to the relative path.
+    ipa_path = ENV["IPA_PATH"] || "build/App.ipa"
+
+    upload_to_testflight(
+      # api_key is nil on legacy path; fastlane falls back to
+      # FASTLANE_USER/PASSWORD env vars automatically.
+      api_key: api_key,
+      ipa: ipa_path,
+      # Skip the long wait while Apple processes the build server-side.
+      # CI doesn't need UPLOAD to also be the WAIT step; testers see
+      # the build in TestFlight ~15 min later regardless.
+      skip_waiting_for_build_processing: true,
+      # Step 9 fills RELEASE_NOTES from `git log`. nil-safe.
+      changelog: ENV["RELEASE_NOTES"],
+    )
+  end
+end
