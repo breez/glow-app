@@ -99,3 +99,11 @@ app/src/main/assets/public
 app/src/main/assets/capacitor.config.json
 app/src/main/assets/capacitor.plugins.json
 app/src/main/res/xml/config.xml
+
+# gradle-play-publisher service account credentials.
+# Local fallback path the `play { serviceAccountCredentials.set(...) }`
+# block in app/build.gradle uses when the
+# PLAY_SERVICE_ACCOUNT_JSON_PATH env var isn't set. Never commit
+# the JSON itself; CI writes it to $RUNNER_TEMP from the
+# PLAY_SERVICE_ACCOUNT_JSON secret.
+app/play-service-account.json

@@ -11,3 +11,14 @@ capacitor-cordova-ios-plugins
 # Generated Config files
 App/App/capacitor.config.json
 App/App/config.xml
+
+# Fastlane (Phase 4C) — runtime-generated artifacts. The Gemfile +
+# Gemfile.lock + fastlane/{Appfile,Matchfile,Fastfile} ARE committed
+# (CI relies on bundler-cache hits keyed off Gemfile.lock).
+App/fastlane/report.xml
+App/fastlane/Preview.html
+App/fastlane/screenshots
+App/fastlane/test_output
+App/fastlane/README.md
+App/fastlane/readme.md
+

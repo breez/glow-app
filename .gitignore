@@ -9,6 +9,16 @@ android/build/
 android/.idea/
 android/local.properties
 
+# Root-level /build/ — iOS xcodebuild output from
+# scripts/ci/build-ios-ipa.sh. CI and local test runs write
+# the .xcarchive + .ipa + exportOptions.plist here. Anchored to
+# repo root so it doesn't match intentional nested build/ dirs.
+/build/
+
+# Xcode Swift Package Manager local state per plugin. Generated
+# by Xcode on open; not shareable across machines.
+plugins/*/.swiftpm/
+
 # Environment
 .env
 .env.local
@@ -28,3 +38,15 @@ Thumbs.db
 # @capacitor/assets emits PWA icon output at repo root even when --ios --android
 # flags are passed. We only use iOS + Android outputs; the PWA belongs to glow-web.
 /icons/
+
+# Signing material (Phase 4C) — NEVER commit any of these. Certs,
+# provisioning profiles, keystores, and service-account JSONs are
+# either downloaded locally for secret generation or written by CI
+# from GitHub secrets at $RUNNER_TEMP paths.
+*.mobileprovision
+*.p12
+*.p8
+*.jks
+*.keystore
+!android/debug.keystore
+play-service-account.json
