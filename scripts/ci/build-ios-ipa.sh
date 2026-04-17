@@ -56,14 +56,29 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 EOF
 
 echo "==> xcodebuild archive ($CONFIGURATION, method=$METHOD)"
-xcodebuild archive \
-  -project ios/App/App.xcodeproj \
-  -scheme App \
-  -configuration "$CONFIGURATION" \
-  -destination "generic/platform=iOS" \
-  -archivePath "$ARCHIVE_PATH" \
-  -allowProvisioningUpdates \
-  | xcpretty || true  # xcpretty is optional; fall through on missing
+# Pipe through xcpretty when available for human-readable output, but
+# don't mask xcodebuild's exit code when it's missing. The previous
+# `| xcpretty || true` swallowed both xcpretty-missing AND archive
+# failures, hiding real errors.
+if command -v xcpretty >/dev/null 2>&1; then
+  set -o pipefail
+  xcodebuild archive \
+    -project ios/App/App.xcodeproj \
+    -scheme App \
+    -configuration "$CONFIGURATION" \
+    -destination "generic/platform=iOS" \
+    -archivePath "$ARCHIVE_PATH" \
+    -allowProvisioningUpdates \
+    | xcpretty
+else
+  xcodebuild archive \
+    -project ios/App/App.xcodeproj \
+    -scheme App \
+    -configuration "$CONFIGURATION" \
+    -destination "generic/platform=iOS" \
+    -archivePath "$ARCHIVE_PATH" \
+    -allowProvisioningUpdates
+fi
 
 echo "==> xcodebuild -exportArchive"
 xcodebuild -exportArchive \
