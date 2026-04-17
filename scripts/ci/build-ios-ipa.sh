@@ -1,34 +1,48 @@
 #!/usr/bin/env bash
-# build-ios-ipa.sh — produce an ad-hoc signed IPA for Firebase App
-# Distribution.
+# build-ios-ipa.sh — produce a signed IPA.
 #
-# Expects import-ios-ad-hoc-cert.sh to have been run first (keychain
-# + provisioning profile installed). Writes:
+# Expects import-ios-cert.sh to have been run first (keychain +
+# provisioning profile installed). Writes:
 #   build/App.xcarchive/ — archive output
 #   build/App.ipa        — exported IPA
 #
 # Arguments:
-#   $1  configuration (default: Debug)
+#   $1  configuration — Debug | Release (default: Debug)
+#   $2  export method — ad-hoc | app-store (default: ad-hoc)
+#
+# Export method maps to downstream distribution:
+#   ad-hoc     → Firebase App Distribution (ios-preview job)
+#   app-store  → TestFlight (ios-release job)
+# The installed provisioning profile MUST match the chosen method
+# (ad-hoc profile for ad-hoc export, app-store profile for app-store
+# export) or xcodebuild will fail to find a usable profile.
 
 set -euo pipefail
 
 CONFIGURATION="${1:-Debug}"
+METHOD="${2:-ad-hoc}"
+
+case "$METHOD" in
+  ad-hoc|app-store) ;;
+  *) echo "error: unsupported method '$METHOD' (expected ad-hoc | app-store)" >&2; exit 2 ;;
+esac
+
 BUILD_DIR="build"
 ARCHIVE_PATH="$BUILD_DIR/App.xcarchive"
 EXPORT_OPTIONS_PATH="$BUILD_DIR/exportOptions.plist"
 
 mkdir -p "$BUILD_DIR"
 
-# Minimal ad-hoc exportOptions.plist. The provisioning profile
-# installed by import-ios-ad-hoc-cert.sh is auto-picked by
-# xcodebuild when method=ad-hoc is set here.
-cat > "$EXPORT_OPTIONS_PATH" <<'EOF'
+# Minimal exportOptions.plist. The provisioning profile installed
+# by import-ios-cert.sh is auto-picked by xcodebuild once method
+# here matches the profile type.
+cat > "$EXPORT_OPTIONS_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>method</key>
-  <string>ad-hoc</string>
+  <string>${METHOD}</string>
   <key>compileBitcode</key>
   <false/>
   <key>signingStyle</key>
@@ -41,7 +55,7 @@ cat > "$EXPORT_OPTIONS_PATH" <<'EOF'
 </plist>
 EOF
 
-echo "==> xcodebuild archive ($CONFIGURATION)"
+echo "==> xcodebuild archive ($CONFIGURATION, method=$METHOD)"
 xcodebuild archive \
   -project ios/App/App.xcodeproj \
   -scheme App \
