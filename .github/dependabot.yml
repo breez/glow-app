@@ -1,55 +1,239 @@
 version: 2
 
-# Dependabot opens weekly update PRs for every ecosystem glow-app
-# depends on. Each PR runs through the full CI gate (web / android
-# + opt-in ios) so regressions surface before a maintainer reviews.
+# Dependabot configuration — tuned to cut the weekly PR noise while
+# still surfacing actionable bumps quickly.
 #
-# Ignores target the two patched Capacitor packages — bumping them
-# without re-validating the patches in patches/ would silently break
-# keyboard handling.
+# Strategies:
+#   1. Group minor + patch bumps per ecosystem into a single PR so a
+#      reviewer doesn't see 5 separate PRs for the same week. Major
+#      bumps stay individual — they're the ones needing code review.
+#   2. Ignore majors for anything we need to upgrade as a coordinated
+#      stack (AGP + Gradle wrapper + GPP; all four Capacitor packages
+#      together; etc.). These surface as "open a PR manually when
+#      you're ready" rather than weekly noise.
+#   3. Stay on `weekly` for npm/gradle/actions; Monday AM is a good
+#      tradeoff between "fresh when you sit down" and "not clobbering
+#      Friday afternoon".
+#   4. Security updates are NOT affected by grouping or interval —
+#      Dependabot always opens those immediately in their own PRs.
+
 updates:
+  # ──────────────────────────────────────────────────────────────────
   # glow-app root — Capacitor CLI/core + plugins + patch-package.
+  # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 3
     labels: [dependencies, npm]
+    groups:
+      # All @capacitor/* packages MUST move in lockstep — core, cli,
+      # ios, android all need to match, otherwise bridge ABI breaks.
+      # `@capacitor/android` is excluded from this group (and from
+      # bumps altogether, see ignore below) because it carries a
+      # local patch in patches/. Keep this group minor+patch only;
+      # majors need a deliberate plan.
+      capacitor:
+        patterns:
+          - "@capacitor/*"
+          - "@capgo/capacitor-*"
+        update-types:
+          - minor
+          - patch
+      # Small dev + shared deps — grouping trims noise.
+      dev-tooling:
+        patterns:
+          - "@types/*"
+          - "prettier*"
+          - "eslint*"
+          - "typescript"
+        update-types:
+          - minor
+          - patch
     ignore:
+      # Patched via patches/@capacitor+keyboard+8.0.3.patch. Bumping
+      # would silently break keyboard handling until the patch is
+      # re-authored against the new version.
       - dependency-name: "@capacitor/keyboard"
+      # Patched via patches/@capacitor+android+8.3.0.patch. Same
+      # reason. Coordinated bump requires re-authoring the patch.
       - dependency-name: "@capacitor/android"
+      # Hold all @capacitor/* major bumps — Capacitor 9 would require
+      # AGP 9 + iOS deployment-target shifts + full plugin
+      # re-validation. Open a manual PR when ready to migrate.
+      - dependency-name: "@capacitor/*"
+        update-types: ["version-update:semver-major"]
+      # TypeScript majors tend to break typings across the dep graph.
+      # Hold and open manually when prepared for the migration.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
+  # ──────────────────────────────────────────────────────────────────
   # glow-web submodule — React, Vite, Spark SDK peer.
+  # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: npm
     directory: /glow-web
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 3
     labels: [dependencies, npm, submodule]
+    groups:
+      # React + Vite toolchain moves in lockstep within a major.
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react*"
+        update-types:
+          - minor
+          - patch
+      vite:
+        patterns:
+          - "vite*"
+          - "@vitejs/*"
+        update-types:
+          - minor
+          - patch
+      dev-tooling:
+        patterns:
+          - "@types/*"
+          - "prettier*"
+          - "eslint*"
+          - "typescript"
+          - "vitest*"
+          - "@testing-library/*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Major framework bumps need coordinated migrations.
+      - dependency-name: "react*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # Spark SDK is pinned via .spark-sdk-ref (git SHA) + local tgz
+      # overlay — npm registry bumps wouldn't take effect anyway.
+      - dependency-name: "@breeztech/breez-sdk-spark"
 
-  # In-house Capacitor plugins that ship as file: deps.
+  # ──────────────────────────────────────────────────────────────────
+  # In-house Capacitor plugins. Low churn — reduce to monthly.
+  # Plugin-internal deps (dev-only: tsc, rimraf) rarely matter.
+  # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: npm
     directory: /plugins/capacitor-passkey-prf
     schedule:
-      interval: weekly
+      interval: monthly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 2
     labels: [dependencies, npm, plugins]
+    groups:
+      plugin-deps:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /plugins/capacitor-native-vault
     schedule:
-      interval: weekly
+      interval: monthly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 2
     labels: [dependencies, npm, plugins]
+    groups:
+      plugin-deps:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
+  # ──────────────────────────────────────────────────────────────────
   # Android Gradle (AGP / Kotlin / androidx).
+  # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: gradle
     directory: /android
     schedule:
       interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 3
     labels: [dependencies, gradle]
+    groups:
+      # androidx + Google libs — routine minor+patch churn.
+      androidx:
+        patterns:
+          - "androidx.*"
+          - "com.google.android.*"
+          - "com.google.firebase:*"
+          - "com.google.gms:google-services"
+        update-types:
+          - minor
+          - patch
+      kotlin:
+        patterns:
+          - "org.jetbrains.kotlin*"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # AGP + Gradle wrapper move together. AGP 9 requires Gradle 9,
+      # and our gradle-play-publisher 3.12.1 works only on AGP 8.
+      # Coordinated bump plan: pin AGP 9 + wrapper 9 + GPP 4 in the
+      # same PR. Dependabot's individual bumps are destructive here.
+      - dependency-name: "com.android.tools.build:gradle"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "com.github.triplet.gradle:play-publisher"
+        update-types: ["version-update:semver-major"]
 
-  # Pinned action versions in .github/workflows/ + composite actions.
+  # ──────────────────────────────────────────────────────────────────
+  # GitHub Actions — pinned major versions in workflows + composite
+  # actions. Group minor/patch; hold individual majors for review.
+  # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Asia/Jerusalem
+    open-pull-requests-limit: 3
     labels: [dependencies, ci]
+    groups:
+      # Group all action minor + patch bumps into one PR — small
+      # surface, mostly safe, one review vs. 6 separate ones.
+      actions-minor:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # upload-artifact v5 introduced artifact immutability; breaks
+      # any workflow that re-uploads to the same artifact name.
+      # Our failure-upload paths need audit before moving to v5+.
+      - dependency-name: "actions/upload-artifact"
+        update-types: ["version-update:semver-major"]
+      # gradle/actions v5+ changed cache-encryption-key handling;
+      # needs smoke test against our current GRADLE_ENCRYPTION_KEY
+      # (optional) flow.
+      - dependency-name: "gradle/actions"
+        update-types: ["version-update:semver-major"]
