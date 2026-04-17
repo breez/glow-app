@@ -45,6 +45,28 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // Release signing is env-driven so the upload keystore + its
+        // passwords never live in source. CI decodes
+        // RELEASE_KEYSTORE_BASE64 into a file at $RUNNER_TEMP/release.keystore
+        // and exports RELEASE_KEYSTORE_PATH for this block to pick up.
+        //
+        // When the envs are absent (any local `./gradlew assembleRelease`
+        // without secrets exported), storeFile stays unset and the
+        // buildTypes.release block below falls back to the debug
+        // signingConfig — produces an installable APK for smoke
+        // testing, just not one we can ship to Play.
+        release {
+            def keystorePathEnv = System.getenv('RELEASE_KEYSTORE_PATH')
+            def keystorePasswordEnv = System.getenv('RELEASE_KEYSTORE_PASSWORD')
+            def keyAliasEnv = System.getenv('RELEASE_KEY_ALIAS')
+            def keyPasswordEnv = System.getenv('RELEASE_KEY_PASSWORD')
+            if (keystorePathEnv && keystorePasswordEnv && keyAliasEnv && keyPasswordEnv) {
+                storeFile file(keystorePathEnv)
+                storePassword keystorePasswordEnv
+                keyAlias keyAliasEnv
+                keyPassword keyPasswordEnv
+            }
+        }
     }
     buildTypes {
         debug {
@@ -57,6 +79,9 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
+            // Use the env-driven release config when populated,
+            // fall back to debug signing for local smoke builds.
+            signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
