@@ -62,11 +62,20 @@ updates:
       # Patched via patches/@capacitor+android+8.3.0.patch. Same
       # reason. Coordinated bump requires re-authoring the patch.
       - dependency-name: "@capacitor/android"
-      # Hold all @capacitor/* major bumps — Capacitor 9 would require
-      # AGP 9 + iOS deployment-target shifts + full plugin
-      # re-validation. Open a manual PR when ready to migrate.
+      # Pin the Capacitor stack at 8.3.0. Bumping any @capacitor/*
+      # package above 8.3.0 requires a coordinated upgrade of all
+      # four core packages (core, cli, ios, android) together —
+      # @capacitor/android stays locked at 8.3.0 until the local
+      # patches/@capacitor+android+8.3.0.patch file is rebased
+      # against the new version. Shipping core/cli/ios ahead of
+      # android creates a Capacitor-internal version skew.
+      #
+      # Lift this pin via a deliberate PR that bumps all four in
+      # lockstep + rebases the android patch + re-runs the full
+      # device matrix. Covers minor + patch + major for the whole
+      # scope.
       - dependency-name: "@capacitor/*"
-        update-types: ["version-update:semver-major"]
+        versions: [">= 8.3.1"]
       # TypeScript majors tend to break typings across the dep graph.
       # Hold and open manually when prepared for the migration.
       - dependency-name: "typescript"
