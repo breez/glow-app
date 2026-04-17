@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# import-ios-ad-hoc-cert.sh — set up a temporary macOS keychain
-# and import the ad-hoc distribution cert + provisioning profile
-# for the ios-preview CI job.
+# import-ios-cert.sh — set up a temporary macOS keychain and import
+# a distribution cert + provisioning profile for an iOS CI build.
 #
-# Reads three secrets from the environment:
+# Used by BOTH `ios-preview` (ad-hoc) and `ios-release` (app-store)
+# jobs — the same Apple Distribution cert signs both export methods;
+# only the profile + the `method` passed to build-ios-ipa.sh differ.
+# The calling CI step maps the appropriate repo secret
+# (IOS_PREVIEW_* or IOS_RELEASE_*) to the generic env vars below.
+#
+# Reads four env vars:
 #   P12_BASE64                  base64-encoded .p12 distribution cert
+#   P12_PASSWORD                .p12 export passphrase (optional, default empty)
 #   KEYCHAIN_PASSWORD           unlock password for the temp keychain
 #   PROVISIONING_PROFILE_BASE64 base64-encoded .mobileprovision
 #
@@ -13,7 +19,7 @@
 #     can use for signing.
 #   - The provisioning profile installed under
 #     ~/Library/MobileDevice/Provisioning Profiles/ so xcodebuild
-#     can auto-select it.
+#     can auto-select it by bundle ID + team ID.
 #
 # This script runs only on macOS CI runners. It expects a fresh
 # runner each invocation; no cleanup between runs is required.

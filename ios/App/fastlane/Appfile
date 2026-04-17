@@ -1,0 +1,7 @@
+# Default app_identifier for fastlane lanes. TestFlight / App Store
+# uploads are Release-config builds so this points at the unsuffixed
+# release bundle ID. Debug builds (technology.breez.glow.dev) never
+# go through fastlane lanes — local dev + Firebase App Distribution
+# handle them.
+app_identifier("technology.breez.glow")
+team_id("F7R2LZH3W5")

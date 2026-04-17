@@ -51,5 +51,21 @@
 	<string>Authenticate with Face ID to access your wallet via passkey</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Glow uses the camera to scan Lightning and Bitcoin payment QR codes.</string>
+	<!-- App Store export compliance (Phase 4C). Setting this to false
+	     skips the encryption-export questionnaire on every TestFlight
+	     upload — a hard requirement for `upload_to_testflight` to
+	     succeed without per-build manual review.
+
+	     Glow uses only Apple-provided cryptographic primitives
+	     (TLS via URLSession, Keychain SecAccessControl) plus
+	     wallet-domain crypto (BIP32/BIP39 + secp256k1) that falls
+	     under the "exempt" category for cryptocurrency wallets and
+	     authentication-only use. No proprietary encryption
+	     algorithms travel outside the app. If we ever ship custom
+	     encryption (e.g., E2E messaging), revisit and either set
+	     this to true + answer the questionnaire, or add a CCATS-
+	     equivalent exemption note here. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

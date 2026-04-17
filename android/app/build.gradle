@@ -1,14 +1,30 @@
 apply plugin: 'com.android.application'
+apply plugin: 'com.github.triplet.play'
 
 android {
     namespace = "technology.breez.glow"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.breez.spark.glow.dev"
+        // Base applicationId — `release` buildType ships this unchanged
+        // as `technology.breez.glow`. `debug` buildType appends `.dev`
+        // via `applicationIdSuffix ".dev"` below, so debug APKs get
+        // `technology.breez.glow.dev` without any flavor plumbing.
+        // Both IDs are registered on the Apple Developer portal for
+        // iOS parity; the debug keystore SHA is in
+        // keys.breez.technology/.well-known/assetlinks.json under
+        // `technology.breez.glow.dev`; the Play-rewritten release
+        // cert SHA lands under `technology.breez.glow` after first
+        // Play App Signing enrollment.
+        applicationId "technology.breez.glow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // versionCode + versionName are env-driven on tag-triggered
+        // CI runs (see scripts/ci/compute-version.sh — derives both
+        // from the release-X.Y.Z tag + GITHUB_RUN_NUMBER). Local
+        // builds without the envs fall back to a 0.0.0-dev marker
+        // so it's obvious which builds came from the tag pipeline.
+        versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
+        versionName System.getenv('VERSION_NAME') ?: '0.0.0-dev'
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -19,7 +35,7 @@ android {
     // Sign debug builds with the committed android/debug.keystore
     // rather than Gradle's auto-generated ~/.android/debug.keystore.
     //
-    // Why: the com.breez.spark.glow.dev package has the SHA-256
+    // Why: the technology.breez.glow.dev package has the SHA-256
     // fingerprint of *this* specific keystore registered in
     // keys.breez.technology/.well-known/assetlinks.json. Without
     // a committed keystore, every fresh CI runner (and every new
@@ -35,12 +51,43 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        // Release signing is env-driven so the upload keystore + its
+        // passwords never live in source. CI decodes
+        // RELEASE_KEYSTORE_BASE64 into a file at $RUNNER_TEMP/release.keystore
+        // and exports RELEASE_KEYSTORE_PATH for this block to pick up.
+        //
+        // When the envs are absent (any local `./gradlew assembleRelease`
+        // without secrets exported), storeFile stays unset and the
+        // buildTypes.release block below falls back to the debug
+        // signingConfig — produces an installable APK for smoke
+        // testing, just not one we can ship to Play.
+        release {
+            def keystorePathEnv = System.getenv('RELEASE_KEYSTORE_PATH')
+            def keystorePasswordEnv = System.getenv('RELEASE_KEYSTORE_PASSWORD')
+            def keyAliasEnv = System.getenv('RELEASE_KEY_ALIAS')
+            def keyPasswordEnv = System.getenv('RELEASE_KEY_PASSWORD')
+            if (keystorePathEnv && keystorePasswordEnv && keyAliasEnv && keyPasswordEnv) {
+                storeFile file(keystorePathEnv)
+                storePassword keystorePasswordEnv
+                keyAlias keyAliasEnv
+                keyPassword keyPasswordEnv
+            }
+        }
     }
     buildTypes {
         debug {
+            // Debug builds get `.dev` appended: applicationId becomes
+            // `technology.breez.glow.dev`. The suffix also cascades
+            // into ResourceProvider authorities, DYNAMIC_RECEIVER_NOT_
+            // EXPORTED_PERMISSION, etc., so debug + release can
+            // install side-by-side on the same device.
+            applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
         }
         release {
+            // Use the env-driven release config when populated,
+            // fall back to debug signing for local smoke builds.
+            signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
@@ -66,6 +113,29 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// gradle-play-publisher (GPP) — uploads release AABs to the Play
+// Store internal-testing track on tag-triggered CI runs.
+//
+// Service account JSON is written to disk by CI from the
+// PLAY_SERVICE_ACCOUNT_JSON secret; the path is exposed via
+// PLAY_SERVICE_ACCOUNT_JSON_PATH for this block to pick up. When
+// the env var is absent (any local invocation without secrets)
+// GPP's tasks no-op cleanly because the credentials file path
+// resolves to a non-existent local fallback.
+//
+// Release notes are read per-locale from
+// android/app/src/main/play/release-notes/<locale>/<track>.txt.
+// CI overwrites en-US/internal.txt from `git log` output before
+// running publishReleaseBundle.
+play {
+    track.set('internal')
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.COMPLETED)
+    defaultToAppBundles.set(true)
+    serviceAccountCredentials.set(
+        file(System.getenv('PLAY_SERVICE_ACCOUNT_JSON_PATH') ?: 'play-service-account.json')
+    )
+}
 
 try {
     def servicesJSON = file('google-services.json')

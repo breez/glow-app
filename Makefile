@@ -91,13 +91,13 @@ deploy-ios: ios ## Build and install on connected iOS device
 
 deploy-android: android ## Build and install on connected Android device
 	adb -s $(ANDROID_DEVICE_ID) install -r android/app/build/outputs/apk/debug/app-debug.apk
-	@# The Debug build's applicationId is `com.breez.spark.glow.dev` (from app/build.gradle)
+	@# The Debug build's applicationId is `technology.breez.glow.dev` (from app/build.gradle)
 	@# and the MainActivity class lives in the `technology.breez.glow` namespace, so
-	@# `am start -n com.breez.spark.glow/.MainActivity` resolves to the wrong FQCN and
+	@# `am start -n technology.breez.glow.dev/.MainActivity` resolves to the wrong FQCN and
 	@# fails with "Activity class does not exist". `monkey` takes just the package
 	@# name and resolves the default launcher activity automatically — resilient to
 	@# applicationId suffixes and namespace changes.
-	adb -s $(ANDROID_DEVICE_ID) shell monkey -p com.breez.spark.glow.dev -c android.intent.category.LAUNCHER 1
+	adb -s $(ANDROID_DEVICE_ID) shell monkey -p technology.breez.glow.dev -c android.intent.category.LAUNCHER 1
 
 clean: ## Remove build artifacts
 	rm -rf glow-web/dist

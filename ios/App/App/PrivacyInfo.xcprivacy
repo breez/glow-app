@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  App-level privacy manifest (Phase 4C).
+
+  Required by Apple as of May 1, 2024 for new apps; required-reason
+  API declarations enforced for all apps from Feb 12, 2025.
+
+  Capacitor 8 ships plugin-level PrivacyInfo.xcprivacy files inside
+  the Capacitor + CapacitorCordova frameworks. App bundle still
+  needs its own — Apple aggregates from app + every linked
+  framework.
+
+  Required-reason entries below are from @capacitor/filesystem usage
+  in the in-app log-sharing flow (Settings → Share Logs writes a
+  bundled log file to /tmp; reading file timestamps + disk space
+  fall under the required-reason API list).
+
+  Plugins NOT triggering required-reason declarations in our build:
+    - @capacitor/preferences          NOT INSTALLED (would need CA92.1)
+    - @capacitor/app                  no required-reason APIs
+    - @capacitor/browser              no required-reason APIs
+    - @capacitor/keyboard             no required-reason APIs
+    - @capacitor/share                no required-reason APIs
+    - @capacitor/splash-screen        no required-reason APIs
+    - @capacitor/status-bar           no required-reason APIs
+    - @capgo/capacitor-navigation-bar no required-reason APIs
+    - capacitor-passkey-prf           ASAuthorization is not in the list
+    - capacitor-native-vault          Keychain SecItem* is not in the list
+
+  References:
+    https://developer.apple.com/documentation/bundleresources/privacy_manifest_files
+    https://capacitorjs.com/docs/v5/ios/privacy-manifest
+-->
+<plist version="1.0">
+<dict>
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- C617.1 — display file timestamp to the person
+				     using the device. Used by @capacitor/filesystem
+				     when the in-app log viewer (Settings → Share
+				     Logs) reads bundled log file metadata. -->
+				<string>C617.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryDiskSpace</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- E174.1 — display disk space information to the
+				     person using the device. Used by
+				     @capacitor/filesystem when reporting free space
+				     for log writes. -->
+				<string>E174.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

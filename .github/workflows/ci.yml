@@ -15,7 +15,7 @@ on:
       - '.github/PULL_REQUEST_TEMPLATE.md'
   push:
     branches: [main]
-    tags: ['preview-*', 'rc-*']
+    tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
 
 # Cancel superseded runs on the same PR / branch. Matches the glow-web
@@ -270,8 +270,8 @@ jobs:
           key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
           restore-keys: pods-
 
-      - name: Import ad-hoc certificate + provisioning profile
-        run: ./scripts/ci/import-ios-ad-hoc-cert.sh
+      - name: Import distribution cert + ad-hoc profile
+        run: ./scripts/ci/import-ios-cert.sh
 
       - name: Build glow-web dist/
         # VITE_BREEZ_API_KEY is baked into the dist bundle at build
@@ -287,13 +287,13 @@ jobs:
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
-      - name: Archive + export IPA
-        run: ./scripts/ci/build-ios-ipa.sh Debug
+      - name: Archive + export IPA (Debug, ad-hoc)
+        run: ./scripts/ci/build-ios-ipa.sh Debug ad-hoc
 
       - name: Upload to Firebase App Distribution
         uses: wzieba/Firebase-Distribution-Github-Action@v1
         with:
-          appId: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          appId: ${{ secrets.FIREBASE_IOS_APP_ID_PREVIEW }}
           serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           groups: internal
           releaseNotes: |
@@ -309,3 +309,324 @@ jobs:
           name: ios-preview-archive
           path: build/App.xcarchive
           retention-days: 7
+
+  # ---------------------------------------------------------------
+  # Phase 4C jobs below. preview-* / rc-* tags add Android FAD;
+  # release-* tags fan out to android-release + ios-release, then
+  # release-github finalizes with a GitHub Release.
+  # ---------------------------------------------------------------
+
+  android-preview:
+    name: Android preview (Firebase App Distribution)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Parity with ios-preview: tag-triggered or manual dispatch only,
+    # never on main pushes (per the 4B macOS-budget logic — for
+    # Android the budget pressure is lower but keeping the trigger
+    # shape symmetric makes the mental model easier).
+    if: >-
+      (github.event_name == 'push' && (
+        startsWith(github.ref, 'refs/tags/preview-') ||
+        startsWith(github.ref, 'refs/tags/rc-')
+      )) ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Build glow-web dist/
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (Android)
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        run: cd android && ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload to Firebase App Distribution
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID_PREVIEW }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          groups: internal
+          releaseNotes: |
+            Trigger: ${{ github.ref_name }} (${{ github.event_name }})
+            Commit: ${{ github.sha }}
+            Message: ${{ github.event.head_commit.message || 'manual dispatch' }}
+          file: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-preview-build-logs
+          path: |
+            android/app/build/reports/**/*
+            android/build/reports/**/*
+          retention-days: 7
+
+  android-release:
+    name: Android release (Play Internal)
+    runs-on: ubuntu-latest
+    # Cold-run budget: web + WASM build + Android NDK + AAR
+    # cross-compile + bundleRelease + Play upload. With cache hits
+    # the Play upload itself is the slowest step (~2-3 min).
+    timeout-minutes: 45
+    if: startsWith(github.ref, 'refs/tags/release-')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          # Need full history so release-notes.sh can find the prior
+          # release-* tag. Default fetch-depth: 1 would only see HEAD.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,android
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Decode release keystore
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo -n "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Write Play service account
+        env:
+          PLAY_SA_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          set -euo pipefail
+          echo "$PLAY_SA_JSON" > "$RUNNER_TEMP/play-sa.json"
+          echo "PLAY_SERVICE_ACCOUNT_JSON_PATH=$RUNNER_TEMP/play-sa.json" >> "$GITHUB_ENV"
+
+      - name: Compute version from tag
+        run: ./scripts/ci/compute-version.sh
+
+      - name: Generate release notes
+        # GPP reads from the release-notes file path; we overwrite
+        # the en-US/internal.txt placeholder with the git-log
+        # output before publishReleaseBundle runs.
+        run: |
+          set -euo pipefail
+          ./scripts/ci/release-notes.sh > android/app/src/main/play/release-notes/en-US/internal.txt
+          cat android/app/src/main/play/release-notes/en-US/internal.txt
+
+      - name: Build glow-web dist/
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps
+        run: npm ci
+
+      - name: Capacitor sync (Android)
+        run: npx cap sync android
+
+      - name: Gradle bundleRelease + publish
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          cd android && ./gradlew :app:bundleRelease :app:publishReleaseBundle --no-daemon
+
+      - name: Upload AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glow-${{ github.ref_name }}-aab
+          path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: android-release-build-logs
+          path: |
+            android/app/build/reports/**/*
+            android/build/reports/**/*
+          retention-days: 7
+
+  ios-release:
+    name: iOS release (TestFlight)
+    runs-on: macos-15
+    # Cold-run budget: web + WASM + iOS xframework cross-compile +
+    # Pods install + xcodebuild archive + IPA export + TestFlight
+    # upload. ASC-side processing time is excluded
+    # (skip_waiting_for_build_processing in Fastfile).
+    timeout-minutes: 75
+    if: startsWith(github.ref, 'refs/tags/release-')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          # release-notes.sh needs full tag history.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,ios
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: CocoaPods cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ios/App/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
+          restore-keys: pods-
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: ios/App
+
+      - name: Build glow-web dist/
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web
+
+      - name: Install glow-app deps
+        run: npm ci
+
+      - name: Capacitor sync (iOS)
+        # Run BEFORE apply-ios-version + signing. cap sync rewrites
+        # Pods refs but preserves CURRENT_PROJECT_VERSION /
+        # MARKETING_VERSION; running it first ensures version +
+        # signing both land on the post-sync project state.
+        run: npx cap sync ios
+
+      - name: Compute version from tag
+        run: ./scripts/ci/compute-version.sh
+
+      - name: Apply version to iOS project
+        run: ./scripts/ci/apply-ios-version.sh
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          NOTES=$(./scripts/ci/release-notes.sh)
+          {
+            echo "RELEASE_NOTES<<RELEASE_NOTES_EOF"
+            echo "$NOTES"
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Import distribution cert + app-store profile
+        # Maps the IOS_RELEASE_* secrets onto the generic env vars
+        # import-ios-cert.sh reads. Same cert as ios-preview; only
+        # the profile differs (app-store vs ad-hoc).
+        env:
+          P12_BASE64: ${{ secrets.IOS_RELEASE_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.IOS_RELEASE_CERT_P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.IOS_RELEASE_KEYCHAIN_PASSWORD }}
+          PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_RELEASE_PROFILE_BASE64 }}
+        run: ./scripts/ci/import-ios-cert.sh
+
+      - name: Archive + export IPA (Release, app-store)
+        run: ./scripts/ci/build-ios-ipa.sh Release app-store
+
+      - name: Upload to TestFlight via fastlane
+        working-directory: ios/App
+        env:
+          # Dual auth — Fastfile picks API key if all three are set,
+          # falls back to FASTLANE_USER/PASSWORD otherwise. Missing
+          # secrets render as empty strings; the Fastfile's
+          # `env_present?` helper treats "" as absent.
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+          FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+          FASTLANE_PASSWORD: ${{ secrets.FASTLANE_PASSWORD }}
+          # Optional — 2FA session cookie. Only needed on legacy path
+          # for `upload_to_testflight` changelog updates against a
+          # 2FA-protected Apple ID. Generate locally via
+          # `fastlane spaceauth -u <email>`; expires every few weeks.
+          FASTLANE_SESSION: ${{ secrets.FASTLANE_SESSION }}
+          # build-ios-ipa.sh writes to $GITHUB_WORKSPACE/build/App.ipa
+          # (repo-root build/). fastlane's working-directory is
+          # ios/App/, so we pass the absolute path via the IPA_PATH
+          # override the Fastfile reads.
+          IPA_PATH: ${{ github.workspace }}/build/App.ipa
+        run: bundle exec fastlane upload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: glow-${{ github.ref_name }}-ipa
+          path: build/App.ipa
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ios-release-archive
+          path: build/App.xcarchive
+          retention-days: 7
+
+  release-github:
+    name: Publish GitHub Release
+    needs: [android-release, ios-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/release-')
+    permissions:
+      # softprops/action-gh-release needs write to mutate releases.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          # Names: glow-<tag>-aab + glow-<tag>-ipa from the two upstream jobs.
+          pattern: glow-${{ github.ref_name }}-*
+          merge-multiple: true
+
+      - name: Compose release notes
+        run: ./scripts/ci/release-notes.sh > RELEASE_NOTES.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            artifacts/**/*.aab
+            artifacts/**/*.ipa
+          prerelease: false
+          make_latest: true

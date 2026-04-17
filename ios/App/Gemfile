@@ -1,0 +1,12 @@
+source "https://rubygems.org"
+
+# Fastlane drives the TestFlight upload pipeline (Phase 4C).
+# `match` decrypts the distribution cert + app-store provisioning
+# profile from the breez/glow-app-match repo; `build_app` archives
+# + exports an .ipa; `upload_to_testflight` ships it via the App
+# Store Connect API key (.p8) provided as env vars in CI.
+#
+# CI uses `bundler-cache: true` on actions/setup-ruby so the
+# Gemfile.lock + ~/.gem cache are restored between runs and we
+# don't pay the ~30s gem-install cost every build.
+gem "fastlane"
