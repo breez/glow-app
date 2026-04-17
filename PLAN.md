@@ -420,13 +420,31 @@ documented in `DEVELOPMENT.md#branch-protection`.
 
 ## Phase 4C: Distribution
 
-- iOS: provisioning + Team ID pinned; Fastlane `pilot` to upload
-  to TestFlight on every merge to `main`
-- Android: Play Console internal-testing track; Fastlane `supply`
-  to upload the signed AAB from CI
-- Release automation: tag-triggered workflow that bumps the
-  `versionCode` / `buildVersion`, builds, uploads, and writes a
-  GitHub Release with the CI-produced IPA / AAB
+- iOS: TestFlight on `release-*` tags via direct-secrets signing
+  (same pattern as Phase 4B's ios-preview ad-hoc). Distribution
+  cert + App Store provisioning profile live as base64-encoded
+  GitHub secrets (`IOS_RELEASE_CERT_P12_BASE64` + `_PASSWORD` +
+  `_KEYCHAIN_PASSWORD` + `IOS_RELEASE_PROFILE_BASE64`), imported
+  into a temp keychain by `scripts/ci/import-ios-cert.sh`. TestFlight
+  upload via fastlane (dual auth: ASC API key preferred, legacy
+  Apple ID + app-specific password as fallback).
+- Android: Play Internal Testing on `release-*` tags via
+  `gradle-play-publisher` 3.12.1 (last 3.x; 4.0.0 needs AGP 9).
+  Play App Signing — Google generates the release key; we keep
+  only an upload key. Release cert SHA appended to assetlinks
+  under `technology.breez.glow.dev` after first enrollment upload.
+- Android preview: Firebase App Distribution on `preview-*` /
+  `rc-*` tags (parity with iOS preview from 4B).
+- Release automation: `release-MAJOR.MINOR.PATCH` tag drives
+  version derivation (`versionCode = M*10_000_000 + m*100_000 +
+  p*1_000 + (RUN_NUMBER % 1000)`), Android + iOS uploads, and a
+  GitHub Release with attached AAB + IPA + git-log changelog.
+- Bundle ID split: debug = `technology.breez.glow.dev`, release
+  = `technology.breez.glow`. Android via `applicationIdSuffix
+  ".dev"` on debug buildType; iOS via per-configuration
+  `PRODUCT_BUNDLE_IDENTIFIER`. Both IDs registered on Apple
+  Developer portal; both in AASA. Enables debug + release
+  side-by-side install on the same device.
 
 ---
 
@@ -452,7 +470,7 @@ documented in `DEVELOPMENT.md#branch-protection`.
 | 3. Native Secure Vault | ✅ Complete | Merged in #2 (initial aparajita-backed version) and #3 (in-house `capacitor-native-vault` plugin, OS-enforced biometric binding, dedicated unlock screen, Capacitor `loggingBehavior` security fix). |
 | 4A. App Polish | ✅ Complete | Branding + native shell + camera + native share / browser + soft keyboard + Android back button + biometric recovery. Verified on physical Android + iOS devices + web PWA. |
 | 4B. CI | ✅ Complete | GitHub Actions (`web` + `android` on every PR, `ios` label-gated, `ios-preview` on tags via Firebase App Distribution), Spark SDK pinned via `.spark-sdk-ref` + `scripts/resolve-spark-sdk.sh`, Dependabot (npm × 4 + gradle + actions). Branch protection enforces `web` / `android` / `ios` as required checks. CodeQL code scanning deferred (requires GitHub Advanced Security, not in current plan tier). |
-| 4C. Distribution | 🔜 Not Started | TestFlight / Play Store internal testing. Also: share iOS archive between `ios` and `ios-preview`, Android Firebase App Distribution, self-hosted Mac runner if cost matters. |
+| 4C. Distribution | 🚧 In Progress | In-repo plumbing landed on `feat/phase-4c-release`: bundle-ID split (`technology.breez.glow` release / `.dev` debug), Gradle release signingConfig (env-driven), gradle-play-publisher 3.12.1, iOS direct-secrets signing via renamed `scripts/ci/import-ios-cert.sh` + parameterized `scripts/ci/build-ios-ipa.sh <config> <method>`, upload-only Fastfile (dual auth: ASC API key preferred, legacy Apple ID fallback), app-level `PrivacyInfo.xcprivacy` + `ITSAppUsesNonExemptEncryption=false`, tag-driven versioning + release-notes scripts, four new CI jobs (`android-preview`, `android-release`, `ios-release`, `release-github`). iOS preview + release secrets set on GitHub. Pending external: Android release (upload keystore + Play service account + Play App Signing enrollment), ASC API key Issuer ID from Admin (OR set `FASTLANE_USER`/`FASTLANE_PASSWORD` for legacy path). |
 | 5. Push Notifications | 🔜 Not Started | Lightning address payment notifications. |
 
 ## Carry-overs for later phases

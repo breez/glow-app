@@ -176,14 +176,14 @@ make deploy-android   # build + install on connected Android device
 
 ### iOS
 
-- **Bundle ID**: `com.breez.spark.glow` (prod), `com.breez.spark.glow.dev` (dev — has debug cert in assetlinks)
+- **Bundle ID**: `technology.breez.glow` (release → TestFlight / App Store), `technology.breez.glow.dev` (debug — has shared debug keystore SHA in assetlinks + AASA). Per-configuration split in `ios/App/App.xcodeproj/project.pbxproj` (Debug config → `.dev`, Release config → `.glow`).
 - **Entitlements**: `webcredentials:keys.breez.technology` (Associated Domains)
 - **Minimum deployment**: iOS 15 (passkey PRF requires iOS 18+, graceful fallback on older)
 - **AASA caching**: Apple caches `apple-app-site-association` aggressively. If passkeys fail on a new bundle ID, go to Settings → Developer → Associated Domains Development → toggle to force refresh.
 
 ### Android
 
-- **Application ID**: `com.breez.spark.glow` (prod), `com.breez.spark.glow.dev` (dev — has debug cert in assetlinks)
+- **Application ID**: base `technology.breez.glow` with `applicationIdSuffix ".dev"` on the debug buildType → debug APKs = `technology.breez.glow.dev`, release AABs = `technology.breez.glow`. Split via buildType suffix (no product flavors needed). Enables debug + release side-by-side installs on the same device.
 - **Asset Links**: `keys.breez.technology/.well-known/assetlinks.json` must list the app's package + signing cert
 - **Minimum SDK**: 24 (passkey PRF requires API 28+, runtime check)
 - **Physical device required** — emulators can't complete WebAuthn registration
@@ -194,7 +194,7 @@ make deploy-android   # build + install on connected Android device
 
 ## Troubleshooting
 
-**"RP ID cannot be validated" (Android)**: The app's package name + signing cert must be in `keys.breez.technology/.well-known/assetlinks.json`. For local dev, use `com.breez.spark.glow.dev` which already has the debug signing cert registered.
+**"RP ID cannot be validated" (Android)**: The app's package name + signing cert must be in `keys.breez.technology/.well-known/assetlinks.json`. For local dev, use `technology.breez.glow.dev` which already has the debug signing cert registered.
 
 **Swift BigNumber build error**: The SDK's `Swift-BigInt` dependency has a compatibility issue with Swift 6.3 when building via `swift build` on macOS. This doesn't affect Xcode builds for iOS — the plugin builds fine through `xcodebuild`.
 
@@ -272,9 +272,9 @@ iOS previews.
 |-------|-------|
 | Firebase project ID | `breez-technology` |
 | Project number | `463327817067` |
-| iOS app ("Glow Debug") — bundle ID | `com.breez.spark.glow.dev` |
-| iOS app — Firebase App ID (stored in `FIREBASE_IOS_APP_ID`) | `1:463327817067:ios:6a85ef20ff5f9860b2b02e` |
-| Android app ("Glow Debug") — package | `com.breez.spark.glow.dev` |
+| iOS app ("Glow Debug") — bundle ID | `technology.breez.glow.dev` |
+| iOS app — Firebase App ID (stored in `FIREBASE_IOS_APP_ID_PREVIEW`) | `1:463327817067:ios:6a85ef20ff5f9860b2b02e` |
+| Android app ("Glow Debug") — package | `technology.breez.glow.dev` |
 | Android app — Firebase App ID (reserved for Phase 4C) | `1:463327817067:android:a89e8ebd1b81c7f1b2b02e` |
 | Tester group alias | `internal` |
 
@@ -311,7 +311,7 @@ Set via `gh secret set <NAME>` or the Settings → Secrets UI.
 |--------|---------|---------|
 | `VITE_BREEZ_API_KEY` | android, ios, ios-preview | Required. Breez SDK API key baked into the glow-web bundle at build time. Without it the SDK fails to init and mnemonic-based onboarding can't reach the wallet. Mirror the value from `glow-web/.env`. |
 | `GRADLE_ENCRYPTION_KEY` | android | Optional. Encrypts the Gradle configuration cache shared across runs. Falls back to unencrypted cache if unset. |
-| `FIREBASE_IOS_APP_ID` | ios-preview | Firebase App Distribution iOS app id (`1:NNNN:ios:HASH`). |
+| `FIREBASE_IOS_APP_ID_PREVIEW` | ios-preview | Firebase App Distribution iOS app id (`1:NNNN:ios:HASH`). |
 | `FIREBASE_SERVICE_ACCOUNT_KEY` | ios-preview | Firebase service-account JSON (raw, not base64). |
 | `IOS_PREVIEW_KEYCHAIN_PASSWORD` | ios-preview | Arbitrary string; unlocks the temp keychain on the CI runner. |
 | `IOS_PREVIEW_CERT_P12_BASE64` | ios-preview | Ad-hoc distribution cert (`.p12`) base64-encoded. `base64 -i cert.p12 \| pbcopy` on macOS. |
@@ -339,7 +339,7 @@ Gradle's `signingConfigs.debug` in `android/app/build.gradle`
 points at this keystore, with the well-known debug credentials
 (`android` / `android`). Every build — local, CI, contributor
 checkout — signs with the same SHA-256, which is registered
-alongside `com.breez.spark.glow.dev` in
+alongside `technology.breez.glow.dev` in
 `keys.breez.technology/.well-known/assetlinks.json` so passkey
 authentication works.
 
@@ -382,13 +382,239 @@ change (e.g. stronger algorithm, expiry, one-off incident):
      -alias androiddebugkey -storepass android | grep SHA256
    ```
 3. **Add** (don't replace) the new fingerprint to the
-   `com.breez.spark.glow.dev` entry in
+   `technology.breez.glow.dev` entry in
    `keys.breez.technology/.well-known/assetlinks.json`.
    Keep the old fingerprint live for a grace period so
    devs with older checkouts can still authenticate.
 4. After the grace period and all installs have picked up
    the new APK, the old fingerprint can be removed from
    assetlinks.
+
+## Release signing (Phase 4C)
+
+Phase 4C wires release distribution to Play Store internal
+testing + TestFlight via tag-triggered CI. The in-repo
+plumbing landed on `feat/phase-4c-release`; activating it
+requires a one-time external setup pass (Play app, ASC app,
+upload keystore, iOS distribution cert + app-store profile, ASC
+API key or legacy Apple ID creds).
+
+### Android release signing
+
+We use **Play App Signing** with Google holding the release key
+(generated by Play during first AAB upload). We hold only the
+**upload key** — easier to rotate via Play Console support if
+ever lost or compromised.
+
+#### Generate the upload keystore (one time)
+
+```bash
+keytool -genkey -v \
+  -keystore glow-upload.jks \
+  -storepass "$STRONG_PASSWORD" \
+  -keypass "$STRONG_PASSWORD" \
+  -alias glow-upload \
+  -keyalg RSA -keysize 4096 -validity 10000 \
+  -dname "CN=Glow Upload Key, O=Breez, L=<city>, C=<country>"
+```
+
+Store the resulting `.jks` + passwords in the Breez keystore
+recovery location (1Password vault or equivalent). Loss of the
+upload key is RECOVERABLE via Play support but inconvenient —
+treat it like any other production secret.
+
+#### GitHub secrets to set
+
+| Secret | Value |
+|--------|-------|
+| `RELEASE_KEYSTORE_BASE64` | `base64 -i glow-upload.jks \| pbcopy` |
+| `RELEASE_KEYSTORE_PASSWORD` | store password |
+| `RELEASE_KEY_ALIAS` | `glow-upload` |
+| `RELEASE_KEY_PASSWORD` | key password |
+| `PLAY_SERVICE_ACCOUNT_JSON` | Google Cloud service account JSON, "Release manager" role on Play Console |
+| `FIREBASE_ANDROID_APP_ID_PREVIEW` | Firebase Android app id (`1:NNNN:android:HASH`) — reuses `FIREBASE_SERVICE_ACCOUNT_KEY` from 4B |
+
+#### Local sanity build (signed)
+
+```bash
+RELEASE_KEYSTORE_PATH=/abs/path/to/glow-upload.jks \
+RELEASE_KEYSTORE_PASSWORD=... \
+RELEASE_KEY_ALIAS=glow-upload \
+RELEASE_KEY_PASSWORD=... \
+cd android && ./gradlew :app:bundleRelease
+```
+
+Without those four envs exported, the release signingConfig
+falls back to the committed debug keystore so the build still
+produces an installable AAB you can sanity-test (just not one
+you can ship to Play).
+
+#### One-time Play App Signing enrollment
+
+After the first signed AAB exists:
+
+1. Play Console → Internal testing → Create new release →
+   Upload the AAB (UI). Play prompts to opt into Play App
+   Signing → choose "Use Google-generated key".
+2. Play Console → Setup → App integrity → App signing key
+   certificate → copy the SHA-256 of the **release** cert.
+3. Open a PR on `keys.bt.webauthn` to APPEND that SHA to the
+   `technology.breez.glow.dev` entry in
+   `.well-known/assetlinks.json`. Do NOT touch the
+   `technology.breez.glow` entry.
+4. Wait for the assetlinks file to redeploy + caches to flush
+   (~5 min) before installing the release AAB on a device for
+   passkey smoke-testing.
+
+After enrollment, all subsequent uploads are CI-driven via
+`gradle-play-publisher` 3.12.1 (pinned to the last 3.x release
+because GPP 4.0.0 requires Android Gradle Plugin 9 and we
+ship AGP 8).
+
+### iOS release signing — direct-secrets pattern
+
+Phase 4C uses the same direct-secrets pattern Phase 4B established
+for ad-hoc (`ios-preview`): distribution cert + provisioning
+profile live as base64-encoded GitHub secrets, imported into a
+temp keychain on the CI runner by `scripts/ci/import-ios-cert.sh`.
+No fastlane match, no cert git repo, no encryption-passphrase
+secret. fastlane is retained ONLY for `upload_to_testflight`
+(wraps altool + sets the ASC changelog post-upload).
+
+The same Apple Distribution cert (SHA-1 `6C:97:AD:24…A5:BA`,
+team `F7R2LZH3W5`) signs both ad-hoc and app-store exports;
+only the `.mobileprovision` differs between the two flows. The
+script is method-neutral — the calling CI step maps the right
+secrets (`IOS_PREVIEW_*` for ad-hoc, `IOS_RELEASE_*` for
+app-store) onto the script's generic env vars.
+
+#### One-time setup (local, per person managing releases)
+
+```bash
+# Distribution cert — reuse the existing Apple Distribution cert
+# (team-wide, not app-specific). If it's not in your Keychain,
+# the Admin exports a .p12 from their Mac and shares via 1Password.
+# Already-existing .p12 at ~/Downloads/AppStore/Certificates/BreezCertificate.p12.
+
+# App Store provisioning profile for technology.breez.glow:
+#   developer.apple.com → Profiles → + → App Store → bundle ID
+#   technology.breez.glow → select Apple Distribution cert →
+#   download .mobileprovision. App Manager role suffices.
+
+# Fastlane (for upload_to_testflight):
+cd ios/App
+bundle install   # generate Gemfile.lock — needs Ruby 3.x via rbenv/asdf
+```
+
+#### GitHub secrets to set (iOS release)
+
+Four cert+profile secrets + auth secrets:
+
+| Secret | Value |
+|--------|-------|
+| `IOS_RELEASE_CERT_P12_BASE64` | `base64 -i BreezCertificate.p12 \| pbcopy` (same bytes as `IOS_PREVIEW_CERT_P12_BASE64`) |
+| `IOS_RELEASE_CERT_P12_PASSWORD` | `.p12` export passphrase (same as preview) |
+| `IOS_RELEASE_KEYCHAIN_PASSWORD` | `openssl rand -hex 16` — random, unique per pipeline |
+| `IOS_RELEASE_PROFILE_BASE64` | `base64 -i Glow.mobileprovision \| pbcopy` (App Store profile for `technology.breez.glow`) |
+
+Plus TestFlight upload auth — pick ONE path:
+
+**Preferred: App Store Connect API key** (needs ASC Admin role
+to generate; App Manager can consume once set)
+
+| Secret | Value |
+|--------|-------|
+| `APP_STORE_CONNECT_API_KEY_ID` | Apple `.p8` key id (e.g. `XYZ1234567`, visible in filename `AuthKey_<KEY_ID>.p8`) |
+| `APP_STORE_CONNECT_API_ISSUER_ID` | ASC team-wide Issuer ID (UUID) |
+| `APP_STORE_CONNECT_API_KEY_BASE64` | `base64 -i AuthKey_XYZ.p8 \| pbcopy` |
+
+**Fallback: legacy Apple ID + app-specific password** (App Manager role sufficient)
+
+| Secret | Value |
+|--------|-------|
+| `FASTLANE_USER` | Apple ID email with role on the Breez ASC team |
+| `FASTLANE_PASSWORD` | App-specific password (generated at appleid.apple.com → Sign-In & Security → App-Specific Passwords) |
+| `FASTLANE_SESSION` | Optional — `fastlane spaceauth -u <email>` output for 2FA changelog updates. Expires every few weeks. |
+
+The Fastfile's `env_present?` helper auto-selects: API key if all
+three `APP_STORE_CONNECT_*` are set, else `FASTLANE_USER` +
+`FASTLANE_PASSWORD`, else errors. Switching between paths is a
+GitHub-secrets-only change — no code edits.
+
+#### Profile renewal (annual)
+
+App Store provisioning profiles expire 1yr after creation. When
+`IOS_RELEASE_PROFILE_BASE64` no longer validates:
+
+1. developer.apple.com → Profiles → find the expired one → Edit → regenerate (same cert + bundle ID).
+2. Download the new `.mobileprovision`.
+3. `base64 -i Glow.mobileprovision | gh secret set IOS_RELEASE_PROFILE_BASE64 --body -`.
+
+Same procedure for the ad-hoc `IOS_PREVIEW_PROFILE_BASE64` when
+adding new tester devices or when it expires.
+
+#### Certificate rotation (annual-ish)
+
+The Apple Distribution cert also expires annually. When it does:
+
+1. Admin generates a new CSR on their Mac + creates a replacement cert on developer.apple.com.
+2. Export `.p12` via Keychain Access → share via 1Password.
+3. Base64-encode + overwrite BOTH `IOS_PREVIEW_CERT_P12_BASE64` AND `IOS_RELEASE_CERT_P12_BASE64` with the new bytes.
+4. Update `IOS_*_CERT_P12_PASSWORD` if the new export used a different passphrase.
+5. Regenerate both profiles (ad-hoc + app-store) since they embed the cert SHA-1 — re-upload the profile secrets.
+
+#### Privacy manifest + export compliance
+
+Phase 4C added `ios/App/App/PrivacyInfo.xcprivacy` declaring
+the required-reason API entries for `@capacitor/filesystem`
+(C617.1 + E174.1) and an `ITSAppUsesNonExemptEncryption=false`
+to skip the encryption-export questionnaire on every
+TestFlight upload.
+
+**Manual one-time Xcode step**: open `ios/App/App.xcodeproj`
+in Xcode, drag `PrivacyInfo.xcprivacy` into the App target
+(Copy items if needed = unchecked; Add to targets = App).
+Without this the file isn't bundled and Apple rejects the
+upload with "Missing privacy manifest" feedback.
+
+### Cutting a release
+
+Once H1–H8 (Play app, ASC app, upload keystore, iOS cert + app-store
+profile, ASC API key or legacy Apple ID creds, Firebase app ids)
+are in place:
+
+```bash
+git checkout main && git pull
+git tag release-0.X.Y
+git push origin release-0.X.Y
+```
+
+CI then runs:
+
+1. `web` + `android` + `ios` (label-gated, so won't run unless
+   pushed from a labeled-PR commit) — same as PR runs.
+2. `android-release` — Gradle bundleRelease + Play upload.
+3. `ios-release` — `import-ios-cert.sh` + `build-ios-ipa.sh Release app-store` + `fastlane upload` → TestFlight.
+4. `release-github` — downloads the AAB + IPA artifacts,
+   composes release notes from `git log` between this and
+   the previous `release-*` tag, publishes a GitHub Release.
+
+Verification checklist:
+
+- [ ] Play Console → Internal testing → new release with
+      `versionCode = M*10_000_000 + m*100_000 + p*1_000 +
+      (RUN_NUMBER % 1000)` and `versionName = M.m.p`.
+- [ ] App Store Connect → TestFlight → Builds → new build
+      "Ready to Test" after Apple processing (~15 min).
+- [ ] GitHub Releases → `release-0.X.Y` with both artifacts.
+- [ ] Smoke test on physical device: passkey onboarding,
+      biometric unlock, send/receive Lightning payment.
+
+If a release tag needs re-cutting (CI flake, etc.), delete
+the tag locally + remotely and re-push — the
+`(RUN_NUMBER % 1000)` suffix in the versionCode formula
+guarantees the new build's versionCode is unique even on the
+same semver, so Play won't reject the duplicate.
 
 ## Branch protection (Phase 4B)
 

@@ -356,15 +356,31 @@ PRs without the label can still merge — see
 
 ### Required secrets
 
-| Secret | Purpose |
-|--------|---------|
-| `GRADLE_ENCRYPTION_KEY` | Gradle config-cache encryption (optional) |
-| `FIREBASE_IOS_APP_ID` | Firebase App Distribution iOS app id |
-| `FIREBASE_SERVICE_ACCOUNT_KEY` | Firebase service-account JSON |
-| `IOS_PREVIEW_KEYCHAIN_PASSWORD` | temp keychain unlock pw |
-| `IOS_PREVIEW_CERT_P12_BASE64` | ad-hoc distribution cert (.p12 → base64) |
-| `IOS_PREVIEW_CERT_P12_PASSWORD` | .p12 import passphrase |
-| `IOS_PREVIEW_PROFILE_BASE64` | ad-hoc provisioning profile (base64) |
+Organized by pipeline phase. Phase 4C adds `IOS_RELEASE_*`,
+`FASTLANE_*` (or `APP_STORE_CONNECT_API_*`), `FIREBASE_ANDROID_APP_ID_PREVIEW`,
+and Android release secrets (not yet listed — pending Android path).
+
+| Secret | Phase | Purpose |
+|--------|-------|---------|
+| `VITE_BREEZ_API_KEY` | 4A | Baked into the web bundle at build time |
+| `GRADLE_ENCRYPTION_KEY` | 4B | Gradle config-cache encryption (optional) |
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | 4B | Firebase service-account JSON (project-scoped; covers dev + prod apps) |
+| `FIREBASE_IOS_APP_ID_PREVIEW` | 4B | Firebase App Distribution iOS app id (Glow Dev — for `.dev` ad-hoc uploads) |
+| `FIREBASE_ANDROID_APP_ID_PREVIEW` | 4C | Firebase App Distribution Android app id (Glow Dev — for `.dev` debug APK uploads) |
+| `IOS_PREVIEW_CERT_P12_BASE64` | 4B | Apple Distribution cert `.p12` (base64) — same cert as IOS_RELEASE_*, mirrored |
+| `IOS_PREVIEW_CERT_P12_PASSWORD` | 4B | `.p12` import passphrase |
+| `IOS_PREVIEW_KEYCHAIN_PASSWORD` | 4B | Temp keychain unlock password (random) |
+| `IOS_PREVIEW_PROFILE_BASE64` | 4B | Ad-hoc `.mobileprovision` for `technology.breez.glow.dev` |
+| `IOS_RELEASE_CERT_P12_BASE64` | 4C | Same Apple Distribution cert as preview — mirrored to keep the secret mapping explicit per pipeline |
+| `IOS_RELEASE_CERT_P12_PASSWORD` | 4C | Same as preview |
+| `IOS_RELEASE_KEYCHAIN_PASSWORD` | 4C | Independent random keychain password (different value from preview) |
+| `IOS_RELEASE_PROFILE_BASE64` | 4C | App Store `.mobileprovision` for `technology.breez.glow` |
+| `APP_STORE_CONNECT_API_KEY_ID` | 4C | ASC API `.p8` Key ID (preferred auth) |
+| `APP_STORE_CONNECT_API_ISSUER_ID` | 4C | ASC team-wide Issuer ID |
+| `APP_STORE_CONNECT_API_KEY_BASE64` | 4C | `.p8` private key (base64) |
+| `FASTLANE_USER` | 4C | Apple ID email (legacy auth fallback when ASC API key is unavailable) |
+| `FASTLANE_PASSWORD` | 4C | App-specific password (legacy auth fallback) |
+| `FASTLANE_SESSION` | 4C | Optional — 2FA session cookie for changelog updates on legacy path |
 
 ### Cost-sensitive choices
 
@@ -383,6 +399,202 @@ Expected total: ~6,900 billed minutes/month. Fits Enterprise
 Cloud easily; ~3,900-minute overage on Pro/Team at ~$30/mo
 if the numbers track the estimate. Escape hatches documented
 in plan-4b Step 10.
+
+## Phase 4C: Store Distribution
+
+In-repo plumbing for tag-triggered release distribution to Play
+Store internal testing + TestFlight. Activated externally by
+H1–H8 (Play app + service account, ASC app + API key or legacy
+Apple ID creds, upload keystore + secrets, iOS distribution
+cert + app-store profile, Firebase Android + iOS app IDs).
+Lives on `feat/phase-4c-release`. See
+`DEVELOPMENT.md` "Release signing (Phase 4C)" for the full
+setup + release-cutting walkthrough; this section is the
+maintainer pointer list.
+
+### Bundle ID + version derivation
+
+- **Debug/release bundle ID split** (reversed D1):
+  - Debug: `technology.breez.glow.dev`. Android via
+    `applicationIdSuffix ".dev"` on the `debug` buildType in
+    `android/app/build.gradle`. iOS via Debug build configuration
+    in `ios/App/App.xcodeproj/project.pbxproj`. Enables side-by-
+    side install of debug + release on the same device.
+  - Release: `technology.breez.glow`. Android from the base
+    `applicationId`. iOS from the Release build configuration.
+    TestFlight + Play uploads ship this one.
+  - Both IDs are registered on Apple Developer portal under team
+    `F7R2LZH3W5`; both are in
+    `keys.breez.technology/.well-known/apple-app-site-association`.
+    `assetlinks.json` only has the `.dev` entry with the debug
+    keystore SHA-256; the release cert SHA from Play App Signing
+    lands under `technology.breez.glow` after first enrollment.
+  - Signing artifacts (distribution cert + provisioning
+    profiles) live as GitHub secrets (base64-encoded), imported
+    into a temp keychain on the CI runner by
+    `scripts/ci/import-ios-cert.sh`. Same Apple Distribution
+    cert signs both ad-hoc and app-store exports; only the
+    profile + `method` flag differ (see "iOS release signing"
+    below). No fastlane `match` / cert git repo.
+- Version derivation: tag `release-MAJOR.MINOR.PATCH` →
+  `versionName = MAJOR.MINOR.PATCH`,
+  `versionCode = MAJOR*10_000_000 + MINOR*100_000 + PATCH*1_000
+   + (GITHUB_RUN_NUMBER % 1000)`.
+- `scripts/ci/compute-version.sh` parses the tag, exports both
+  to `$GITHUB_ENV`. `android/app/build.gradle` reads via
+  `System.getenv()`. iOS uses `scripts/ci/apply-ios-version.sh`
+  → `agvtool new-marketing-version` + `new-version -all`.
+
+### Android release signing
+
+- `android/app/build.gradle` has an env-driven
+  `signingConfigs.release` block reading
+  `RELEASE_KEYSTORE_PATH` / `RELEASE_KEYSTORE_PASSWORD` /
+  `RELEASE_KEY_ALIAS` / `RELEASE_KEY_PASSWORD`. CI's
+  `android-release` job decodes `RELEASE_KEYSTORE_BASE64` →
+  `$RUNNER_TEMP/release.keystore` + sets
+  `RELEASE_KEYSTORE_PATH`.
+- When envs are absent (any local `gradle assembleRelease`
+  without secrets), the `release` buildType falls back to
+  debug signing via the conditional ternary
+  `signingConfig signingConfigs.release.storeFile ?
+   signingConfigs.release : signingConfigs.debug`. Local
+  smoke builds still produce installable APKs.
+- **Play App Signing**: Google generates the release key
+  during first-AAB enrollment. We hold only the upload key.
+  Trade-off vs. self-managed release key: easier rotation via
+  Play support if upload key lost; release-cert SHA only
+  becomes known after first enrollment upload (must then be
+  appended to `keys.bt.webauthn` assetlinks under
+  `technology.breez.glow.dev`).
+- `gradle-play-publisher` 3.12.1
+  (`com.github.triplet.play` plugin in
+  `android/app/build.gradle`) handles CI-driven Play uploads.
+  Pinned to 3.x — GPP 4.0.0 needs AGP 9, we ship AGP 8.
+  Release notes path:
+  `android/app/src/main/play/release-notes/en-US/internal.txt`,
+  overwritten per-release by `scripts/ci/release-notes.sh`.
+
+### iOS release signing — direct-secrets (no match)
+
+- `scripts/ci/import-ios-cert.sh` (renamed from
+  `import-ios-ad-hoc-cert.sh`) is now method-neutral — it
+  imports a distribution cert + provisioning profile into a
+  temp keychain from generic env vars (`P12_BASE64`,
+  `P12_PASSWORD`, `PROVISIONING_PROFILE_BASE64`,
+  `KEYCHAIN_PASSWORD`). The calling CI step maps the right
+  repo secrets (`IOS_PREVIEW_*` for ad-hoc, `IOS_RELEASE_*`
+  for app-store) onto those generic env names.
+- `scripts/ci/build-ios-ipa.sh` accepts two args: `$1`
+  configuration (Debug | Release) and `$2` export method
+  (ad-hoc | app-store). Writes `build/App.xcarchive/` +
+  `build/App.ipa` at the repo root regardless.
+- Same Apple Distribution cert (SHA-1
+  `6C:97:AD:24…A5:BA`) signs both ad-hoc and app-store
+  exports; only the `.mobileprovision` differs. Cert expires
+  2026-12-23 — rotate locally, re-base64, overwrite both
+  `IOS_PREVIEW_CERT_P12_BASE64` + `IOS_RELEASE_CERT_P12_BASE64`
+  secrets (same bytes).
+- Profiles stored as base64 secrets:
+  - `IOS_PREVIEW_PROFILE_BASE64` — ad-hoc for
+    `technology.breez.glow.dev`. Regenerate whenever a new
+    tester device UDID needs adding (Apple Developer portal
+    → Profiles → edit → add device → download).
+  - `IOS_RELEASE_PROFILE_BASE64` — app-store for
+    `technology.breez.glow`. Auto-renews when the profile
+    expires (1yr) — manual step to download + re-base64.
+- `ios/App/Gemfile` + `ios/App/fastlane/{Appfile,Fastfile}`
+  — fastlane retained ONLY for `upload_to_testflight` (wraps
+  altool + handles changelog update post-upload). Lane
+  renamed from `beta` to `upload` — it only uploads; build
+  happens in the shell scripts. Run `bundle install` once
+  locally to generate `Gemfile.lock` (system Ruby 2.6 too
+  old; needs 3.x via rbenv/asdf).
+- **Dual auth** in Fastfile — auto-selects first available:
+  - App Store Connect API key (`APP_STORE_CONNECT_API_KEY_ID`
+    + `ISSUER_ID` + `KEY_BASE64`) — preferred, stable on CI,
+    no 2FA dance. Requires ASC Admin role to generate.
+  - Legacy Apple ID + app-specific password (`FASTLANE_USER`
+    + `FASTLANE_PASSWORD`, optional `FASTLANE_SESSION` 2FA
+    cookie). App Manager works. Use as fallback when the
+    ASC API key path is blocked.
+  - `env_present?` helper treats empty string as absent so
+    unset GitHub secrets (rendered as `""`) don't confuse
+    the branch selection.
+- `ios-release` job step order:
+  `cap sync ios → compute-version → apply-ios-version →
+   release-notes → import-ios-cert.sh → build-ios-ipa.sh
+   Release app-store → bundle exec fastlane upload`. Sync
+  first because it preserves `CURRENT_PROJECT_VERSION` /
+  `MARKETING_VERSION` but rewrites Pods refs; running it
+  before agvtool ensures version + signing both land on the
+  post-sync project state.
+- IPA path: `build-ios-ipa.sh` writes to
+  `$GITHUB_WORKSPACE/build/App.ipa` (repo root). Fastfile
+  reads `IPA_PATH` env override (CI sets it) since
+  `working-directory: ios/App` would otherwise resolve a
+  relative `build/App.ipa` to the wrong place.
+
+### Privacy manifest + export compliance
+
+- `ios/App/App/PrivacyInfo.xcprivacy` declares
+  `NSPrivacyAccessedAPICategoryFileTimestamp` (C617.1) +
+  `NSPrivacyAccessedAPICategoryDiskSpace` (E174.1) for
+  `@capacitor/filesystem` (the in-app log-share flow).
+  Capacitor 8 ships its own framework-level manifest; the
+  app-level file aggregates with it. We do NOT use
+  `@capacitor/preferences` so `CA92.1` is not declared.
+  Keychain `SecItem*` and `ASAuthorization` are NOT in
+  Apple's required-reason list, so the in-house
+  `capacitor-native-vault` + `capacitor-passkey-prf` plugins
+  need no manifest entries.
+- `ios/App/App/Info.plist`:
+  `ITSAppUsesNonExemptEncryption=false`. Glow uses only
+  Apple-provided crypto (TLS, Keychain) + wallet-domain
+  (BIP32/BIP39/secp256k1) which falls under the cryptocurrency
+  + authentication-only exemption. Setting to `false` bypasses
+  the encryption-export questionnaire on every TestFlight
+  upload — required for `upload_to_testflight` to succeed
+  unattended.
+- **Manual one-time Xcode step**: drag
+  `PrivacyInfo.xcprivacy` into the App target in Xcode
+  (Add to targets = App). Hand-editing pbxproj is error-prone
+  so it's a deliberate human task. Apple's "Missing privacy
+  manifest" feedback on TestFlight reject is the canary.
+
+### CI workflow additions (`.github/workflows/ci.yml`)
+
+Three new jobs gated on `release-*` tag pushes plus a fourth
+on `preview-*` / `rc-*`:
+
+- `android-preview` — Firebase App Distribution upload
+  (parity with 4B's `ios-preview`). Uses existing
+  `FIREBASE_SERVICE_ACCOUNT_KEY` + new `FIREBASE_ANDROID_APP_ID_PREVIEW`.
+- `android-release` — `bundleRelease` + `publishReleaseBundle`
+  via gradle-play-publisher. Needs `RELEASE_KEYSTORE_*` +
+  `PLAY_SERVICE_ACCOUNT_JSON` secrets. Uses
+  `fetch-depth: 0` so `release-notes.sh` can find the prior
+  release tag.
+- `ios-release` — direct-secrets signing via
+  `import-ios-cert.sh` + `build-ios-ipa.sh Release app-store`
+  + `fastlane upload`. Needs `IOS_RELEASE_*` (4 secrets:
+  cert p12 + password + keychain + profile) plus EITHER
+  `APP_STORE_CONNECT_*` (3 secrets) OR `FASTLANE_USER` +
+  `FASTLANE_PASSWORD` (+ optional `FASTLANE_SESSION`) for
+  TestFlight upload auth. Same `fetch-depth: 0` for release
+  notes.
+- `release-github` — `needs: [android-release, ios-release]`,
+  downloads both artifacts, publishes a GitHub Release with
+  the AAB + IPA + git-log changelog. `permissions: contents:
+  write` for the release write.
+
+### Branch protection unchanged
+
+`android-release` / `ios-release` / `release-github` are NOT
+added as required status checks because they only run on
+tag pushes, not PR events. Adding them as required would
+block every PR merge. Existing `web` + `android` +
+(label-gated) `ios` checks stay the gate.
 
 ## Key References
 
