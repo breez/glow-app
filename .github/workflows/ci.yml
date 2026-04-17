@@ -73,7 +73,7 @@ jobs:
 
       # Upload vitest coverage artifacts on failure for PR-page
       # drilldown without needing a CI re-run.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: web-test-results
@@ -130,7 +130,7 @@ jobs:
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: glow-${{ github.sha }}-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
@@ -138,7 +138,7 @@ jobs:
 
       # Failure-only upload of gradle / lint reports so the PR page
       # has enough to diagnose without a CI re-run.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: android-build-logs
@@ -220,7 +220,7 @@ jobs:
             build | tee xcodebuild.log
 
       - name: Upload xcodebuild log on failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-build-log
@@ -303,7 +303,7 @@ jobs:
           file: build/App.ipa
 
       - name: Upload archive on failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-preview-archive
