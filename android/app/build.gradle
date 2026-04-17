@@ -1,4 +1,5 @@
 apply plugin: 'com.android.application'
+apply plugin: 'com.github.triplet.play'
 
 android {
     namespace = "technology.breez.glow"
@@ -107,6 +108,29 @@ dependencies {
 }
 
 apply from: 'capacitor.build.gradle'
+
+// gradle-play-publisher (GPP) — uploads release AABs to the Play
+// Store internal-testing track on tag-triggered CI runs.
+//
+// Service account JSON is written to disk by CI from the
+// PLAY_SERVICE_ACCOUNT_JSON secret; the path is exposed via
+// PLAY_SERVICE_ACCOUNT_JSON_PATH for this block to pick up. When
+// the env var is absent (any local invocation without secrets)
+// GPP's tasks no-op cleanly because the credentials file path
+// resolves to a non-existent local fallback.
+//
+// Release notes are read per-locale from
+// android/app/src/main/play/release-notes/<locale>/<track>.txt.
+// CI overwrites en-US/internal.txt from `git log` output before
+// running publishReleaseBundle.
+play {
+    track.set('internal')
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.COMPLETED)
+    defaultToAppBundles.set(true)
+    serviceAccountCredentials.set(
+        file(System.getenv('PLAY_SERVICE_ACCOUNT_JSON_PATH') ?: 'play-service-account.json')
+    )
+}
 
 try {
     def servicesJSON = file('google-services.json')

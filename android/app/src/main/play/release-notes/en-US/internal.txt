@@ -1,0 +1,4 @@
+Glow internal-track build.
+
+CI overwrites this file from `git log` output between the previous
+and current `release-*` tag before publishReleaseBundle runs.
