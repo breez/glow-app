@@ -103,6 +103,30 @@ runs:
         fi
         wasm-pack --version
 
+    # macOS-only: spark-sdk's xtask auto-detects Homebrew LLVM for
+    # wasm32 cross-compile (Apple's system clang lacks the wasm32
+    # target). When the cache misses on a macos-15 runner, we need
+    # to install it before `make sdk-wasm` runs. Linux is unaffected
+    # (system clang via apt supports wasm32 natively).
+    # Source: spark-sdk/crates/xtask/src/main.rs::detect_brew_llvm_paths.
+    - name: Install Homebrew LLVM (macOS WASM cross-compile)
+      if: >-
+        runner.os == 'macOS' &&
+        steps.sdk-artifacts-cache.outputs.cache-hit != 'true' &&
+        contains(inputs.platforms, 'wasm')
+      shell: bash
+      run: |
+        brew install llvm
+        # Sanity: spark-sdk's xtask shells out to `brew --prefix llvm`
+        # to find the cc path. Verify it resolves to a real binary.
+        CLANG_PATH="$(brew --prefix llvm)/bin/clang"
+        if [[ ! -x "$CLANG_PATH" ]]; then
+          echo "error: expected clang at $CLANG_PATH after brew install llvm" >&2
+          exit 1
+        fi
+        echo "Homebrew LLVM clang at: $CLANG_PATH"
+        "$CLANG_PATH" --version | head -1
+
     - name: Setup Android SDK + NDK (if android requested)
       if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'android')
       uses: android-actions/setup-android@v3
