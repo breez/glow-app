@@ -1,11 +1,45 @@
 name: CI
 
-# Keep docs-only PRs off the full build matrix. paths-ignore applies
-# to the whole workflow; if any path NOT in this list changed, all
-# jobs run.
+# ---------------------------------------------------------------------------
+# TRIGGER MODEL — build-on-demand, static-analysis-by-default
+# ---------------------------------------------------------------------------
+# Pre-overhaul model: every push + PR triggered the full build matrix
+# (web + android + iOS), which cost ~300-450 billed min per event and
+# burned ~2.9k min over a single 48h release cycle. Most of that work
+# was redundant — devs already tested locally via `make deploy-ios` /
+# `make deploy-android` before pushing, and CI mostly re-ran what was
+# already green.
 #
-# ios-preview additionally fires on preview-* / rc-* tags and on
-# manual workflow_dispatch; see the job-level `if:` in Step 6.
+# Current model:
+#   - PR open/push        → `web` (static analysis only, ~3 min Linux).
+#                           tsc + lint + vitest + cap doctor + SDK pin
+#                           + submodule push check. Catches the regressions
+#                           static analysis actually catches; trusts the
+#                           dev to have compiled the app locally.
+#   - Push to `main`      → NO auto-CI. Artifacts are produced only on
+#                           explicit intent (tag push or dispatch).
+#   - Tag `release-*`     → Full release pipeline (Android AAB → Play
+#                           Internal + iOS IPA → TestFlight + GitHub
+#                           Release publish). The one place where
+#                           "build everything once more to be sure"
+#                           earns its macOS minutes.
+#   - Tag `preview-*` /
+#     `rc-*`              → Firebase App Distribution uploads (iOS +
+#                           Android preview jobs). Explicit intent.
+#   - workflow_dispatch   → Pick a `job` from the choice list below.
+#                           Each dev can self-serve any build from the
+#                           GitHub UI without poking the workflow.
+#
+# Trade-off: a broken Android build could merge to main without CI
+# noticing. Release tag push still catches it loudly before artifacts
+# reach users. Between releases, devs own catching build regressions
+# locally before pushing. If this proves too loose in practice, a
+# weekly `schedule: cron` health-check of job=full-release (minus
+# uploads — needs a dry_run flag to add) would catch silent drift
+# within 7 days at ~450 billed min/week.
+#
+# See DEVELOPMENT.md "CI dispatch reference" for the job-choice table.
+# ---------------------------------------------------------------------------
 on:
   pull_request:
     paths-ignore:
@@ -14,37 +48,40 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
   push:
-    branches: [main]
+    # Note: `branches: [main]` intentionally NOT listed — main pushes
+    # run no CI. Release & preview tag pushes are the only auto-triggers
+    # that build artifacts.
     tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
     inputs:
-      # iOS-only hotfix mode. Lets us cut a TestFlight build off any
-      # branch without retagging a release-* (which would also re-fire
-      # android-release, republish the GitHub Release, and bump the
-      # Play versionCode we don't want to bump).
-      #
-      # Expected workflow:
-      #   gh workflow run ci.yml --ref <branch-or-sha> \
-      #     -f ios_hotfix=true -f release_version=0.0.2
-      #
-      # - Runs warm-sdk-macos + iOS + ios-release (skips android-* and
-      #   release-github via their existing tag-only gates).
-      # - Synthesizes GITHUB_REF_NAME=release-<release_version> before
-      #   compute-version.sh so VERSION_NAME / VERSION_CODE come out
-      #   the same as a tag-driven release.
-      # - GITHUB_RUN_NUMBER monotonically increments across dispatches,
-      #   so each hotfix IPA gets a strictly-increasing CFBundleVersion
-      #   under the same CFBundleShortVersionString — TestFlight
-      #   accepts it as a new build for the existing marketing version.
-      #
-      # Designed for iterative builds (10+ per feature) during public
-      # beta — no tag pollution.
-      ios_hotfix:
-        description: 'iOS-only hotfix: upload TestFlight IPA, skip Android + GitHub Release'
-        type: boolean
-        default: false
-      release_version:
-        description: 'Semver for the hotfix (e.g. 0.0.2). Required when ios_hotfix=true.'
+      job:
+        description: 'Which build to run'
+        type: choice
+        required: true
+        default: 'ios-testflight'
+        options:
+          # Compile-check only, no upload. Useful for catching iOS build
+          # regressions without burning a TestFlight slot.
+          - ios-unsigned
+          # Ad-hoc signed IPA → Firebase App Distribution (current ios-preview).
+          # Uses the .dev bundle ID + ad-hoc provisioning profile.
+          - ios-firebase
+          # App-store signed IPA → TestFlight. The iterative hotfix target
+          # — dispatch this as many times per feature as you need. Each
+          # dispatch gets a strictly-increasing CFBundleVersion, TestFlight
+          # accepts them all under the same marketing version.
+          - ios-testflight
+          # assembleDebug + APK artifact upload. No signing, no distribution.
+          - android-debug
+          # Debug APK → Firebase App Distribution (.dev bundle ID).
+          - android-firebase
+          # bundleRelease AAB → Play Console Internal Testing (DRAFT).
+          - android-internal
+          # Everything. Equivalent to a release-* tag push without the
+          # tag itself. Use as a pre-release dry-run.
+          - full-release
+      version:
+        description: 'Marketing version (required for ios-testflight, android-internal, full-release — e.g. 0.0.2)'
         type: string
         default: ''
 
@@ -61,55 +98,11 @@ permissions:
   contents: read
 
 jobs:
-  # Detect which parts of the repo changed in this PR so we can skip
-  # the irrelevant Ubuntu builds. Cuts roughly half of Dependabot CI
-  # time (a gradle-only bump doesn't need the web job; an npm-only
-  # bump doesn't need the android job) and the same on real PRs
-  # that touch only one side.
-  #
-  # On `push` events (main + tags) every downstream job runs
-  # unconditionally — path filtering is PR-only, treat main as the
-  # full-coverage channel.
-  changes:
-    name: Detect changed paths
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    if: github.event_name == 'pull_request'
-    # dorny/paths-filter calls the GitHub API's pulls.listFiles to
-    # compute the changed-path set for a pull_request event. The
-    # top-level `permissions: contents: read` doesn't cover that;
-    # add the scoped read here. Scoped to this job only so the
-    # downstream jobs can't abuse the elevated token.
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      web: ${{ steps.filter.outputs.web }}
-      android: ${{ steps.filter.outputs.android }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            web:
-              - 'glow-web/**'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'plugins/**'
-              - 'capacitor.config.ts'
-              - '.github/workflows/**'
-              - '.github/actions/**'
-            android:
-              - 'android/**'
-              - 'package.json'
-              - 'package-lock.json'
-              - 'plugins/**'
-              - 'capacitor.config.ts'
-              - '.github/workflows/**'
-              - '.github/actions/**'
-              - 'scripts/**'
-              - 'Makefile'
+  # NOTE: the former `changes` path-filter job was removed when CI was
+  # restructured to build-on-demand. PRs now always run the web static-
+  # analysis gate (tsc + lint + vitest + cap doctor + submodule check),
+  # and the expensive build jobs (android/ios) never fire on PR events
+  # — they're moved to workflow_dispatch (see `inputs.job`).
 
   # Dedicated SDK "warmer" jobs — build the spark-sdk from source
   # once per pinned SHA per OS, cache the output artifacts. Every
@@ -124,10 +117,21 @@ jobs:
   # actions/cache@v5's default behavior, so even if a downstream job
   # later fails, the cache from the warmer remains for subsequent
   # runs.
+  # Fires whenever any Linux-consuming downstream job will run. On a PR
+  # that's the web static-analysis job (needs the WASM tgz to `npm
+  # install` glow-web's SDK dep); on a release-* tag it's android +
+  # android-release; on a dispatch it's whichever Linux-needing job
+  # the `inputs.job` choice maps to.
   warm-sdk-linux:
     name: Warm SDK cache (Linux — wasm + android)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    if: >-
+      github.event_name == 'pull_request' ||
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["android-debug","android-firebase","android-internal","full-release"]'),
+                inputs.job))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -141,17 +145,18 @@ jobs:
           distribution: temurin
           java-version: '21'
 
+  # Only fires when an iOS build will consume the xcframework. Never on
+  # docs PRs, never on dispatch for Android-only `inputs.job` choices.
   warm-sdk-macos:
     name: Warm SDK cache (macOS — wasm + ios)
     runs-on: macos-15
     timeout-minutes: 60
-    # Same gating as `ios` + tag-gated iOS jobs (ios-preview,
-    # ios-release): only burn macOS minutes when an iOS job will
-    # consume the cache.
     if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'run-ios')
+      contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["ios-unsigned","ios-firebase","ios-testflight","full-release"]'),
+                inputs.job))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -162,21 +167,32 @@ jobs:
           platforms: wasm,ios
           mode: warmer
 
+  # The static-analysis gate for every PR. Always runs. Covers:
+  #   - tsc --noEmit on glow-web
+  #   - eslint on glow-web
+  #   - vitest run on glow-web
+  #   - `cap doctor` — validates Capacitor config + plugin wiring
+  #   - glow-web submodule pushed-to-origin check — catches dev error
+  #     where submodule bump commits to a local-only SHA that CI /
+  #     teammates can't fetch (the 48h cycle that birthed this refactor
+  #     lost ~300 min debugging exactly this kind of silent footgun).
+  #
+  # Explicitly does NOT build Android or iOS — that's the dev's
+  # responsibility to have done locally before pushing. Static analysis
+  # catches type/lint/test regressions; build regressions are caught at
+  # release-tag time or by explicit `workflow_dispatch` of the relevant
+  # build job.
   web:
     name: Web (glow-web submodule)
     runs-on: ubuntu-latest
-    needs: [changes, warm-sdk-linux]
-    # Run on: any non-PR event (main pushes, tag pushes, manual
-    # dispatch), OR on a PR where glow-web / npm root / plugin /
-    # shared CI paths changed. Skipped = passing per branch
-    # protection config (documented in DEVELOPMENT.md#branch-protection).
+    needs: warm-sdk-linux
     if: >-
       !cancelled() &&
-      (github.event_name != 'pull_request' ||
-       needs.changes.outputs.web == 'true')
-    # 20 min is cold-run headroom: the first run has to build the
-    # WASM SDK from source (~10 min) + install glow-web deps + run
-    # tsc/eslint/vitest. Warm runs with SDK cache hit are ~3 min.
+      (github.event_name == 'pull_request' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       (github.event_name == 'workflow_dispatch' && inputs.job == 'full-release'))
+    # Cold-run: build the WASM SDK from source (~10 min) + install
+    # glow-web deps + run tsc/eslint/vitest. Warm cache: ~3 min total.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -186,6 +202,37 @@ jobs:
       - uses: ./.github/actions/setup-glow-app
         with:
           platforms: wasm
+
+      - name: Verify glow-web submodule SHA is on origin
+        # Catches the "local-only SHA" footgun: dev commits a submodule
+        # bump pointing at a glow-web commit they haven't pushed to
+        # origin/breez/glow-web. `git submodule update --init` in CI
+        # would fail with a confusing "reference is not a tree" error
+        # far downstream. Fail loudly at the entrance instead.
+        run: |
+          set -euo pipefail
+          SUBMODULE_SHA=$(git ls-tree HEAD glow-web | awk '{print $3}')
+          if [[ -z "$SUBMODULE_SHA" ]]; then
+            echo "error: could not resolve glow-web submodule SHA from HEAD" >&2
+            exit 1
+          fi
+          echo "glow-web submodule SHA: $SUBMODULE_SHA"
+          cd glow-web
+          # The fetch already happened via checkout@v6 submodules:recursive,
+          # but double-check the SHA is reachable from any origin ref
+          # (branches or tags on breez/glow-web). Reachability, not a
+          # branch-tip match, because stacked feature branches pin
+          # ancestors of their own tips.
+          if ! git cat-file -e "$SUBMODULE_SHA" 2>/dev/null; then
+            echo "error: glow-web SHA $SUBMODULE_SHA not fetchable — is it pushed to origin?" >&2
+            exit 1
+          fi
+          if ! git branch -a --contains "$SUBMODULE_SHA" 2>/dev/null | grep -q '^ *remotes/origin/'; then
+            echo "error: glow-web SHA $SUBMODULE_SHA exists locally but is not on any origin branch." >&2
+            echo "  Push the branch containing $SUBMODULE_SHA to breez/glow-web before landing this commit." >&2
+            exit 1
+          fi
+          echo "OK: glow-web SHA is on origin"
 
       - name: Install glow-web deps + local Spark SDK tgz
         # The composite action restored the WASM tgz into
@@ -207,6 +254,11 @@ jobs:
           npm ci
           npm install "$TGZ" --no-save
 
+      - name: Install glow-app root deps (needed for `npx cap doctor`)
+        # `cap doctor` reads capacitor.config.ts + package.json at the
+        # glow-app root to validate plugin wiring + config schema.
+        run: npm ci --omit=optional
+
       - name: Typecheck
         run: cd glow-web && npx tsc --noEmit
 
@@ -215,6 +267,13 @@ jobs:
 
       - name: Unit tests
         run: cd glow-web && npm run test
+
+      - name: Capacitor config + plugin wiring validation (`npx cap doctor`)
+        # Validates capacitor.config.ts syntax + platform plugin sync.
+        # Cheap (~10s) and catches mis-wired plugins before someone
+        # dispatches an iOS/Android build that would fail with a
+        # confusing native error.
+        run: npx cap doctor
 
       # Upload vitest coverage artifacts on failure for PR-page
       # drilldown without needing a CI re-run.
@@ -225,14 +284,20 @@ jobs:
           path: glow-web/coverage/**/*.json
           retention-days: 7
 
+  # Android debug APK compile + artifact upload. Does NOT fire on PR
+  # events or main pushes — devs test locally via `make deploy-android`
+  # before pushing. Triggered explicitly on:
+  #   - release-* tag push (release pipeline pre-flight)
+  #   - workflow_dispatch with job=android-debug or job=full-release
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
-    needs: [changes, warm-sdk-linux]
+    needs: warm-sdk-linux
     if: >-
       !cancelled() &&
-      (github.event_name != 'pull_request' ||
-       needs.changes.outputs.android == 'true')
+      (startsWith(github.ref, 'refs/tags/release-') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["android-debug","full-release"]'), inputs.job)))
     # 45 min is cold-run headroom: first run builds the WASM SDK
     # (~10 min) + Android NDK install (~3 min) + Android AAR
     # cross-compile (~5 min) + glow-web vite build (~3 min) +
@@ -308,15 +373,15 @@ jobs:
     # Android (~15 min), plus xcodebuild itself (~10 min on a cold
     # Pods cache). Warm runs with SDK + Pods cache hit are ~5 min.
     timeout-minutes: 60
-    # Always run on main pushes and on preview / rc tags (so main
-    # status never drifts). On PRs, opt in via the 'run-ios' label
-    # to contain macOS-minute burn. Branch protection should be
-    # configured with "skipped = passing" so PRs without the label
-    # can still merge — see DEVELOPMENT.md#branch-protection.
+    # Unsigned compile-check. Does NOT fire on release-* tag push — that
+    # already runs ios-release (signed) which does its own archive build,
+    # and running a duplicate unsigned archive would double the macOS
+    # burn. PRs opt in via the `run-ios` label for dev smoke-testing
+    # when the dev wants CI to confirm the iOS build still compiles.
     if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'run-ios')
+      contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["ios-unsigned","full-release"]'), inputs.job))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -403,12 +468,16 @@ jobs:
     # Does NOT run on every main push — the CI plan-tier analysis
     # in plan-4b Step 10 assumes a maintainer-chosen cadence to
     # stay inside Free/Pro/Team macOS-minute quotas.
+    # Fires on preview-*/rc-* tag pushes OR explicit workflow_dispatch
+    # with job=ios-firebase (or full-release). Explicitly NOT fired on
+    # ios-testflight dispatch — the .dev ad-hoc provisioning profile
+    # is currently broken (see DEVELOPMENT.md follow-ups), so only
+    # trigger the upload path when the dev explicitly asks for it.
     if: >-
-      (github.event_name == 'push' && (
-        startsWith(github.ref, 'refs/tags/preview-') ||
-        startsWith(github.ref, 'refs/tags/rc-')
-      )) ||
-      github.event_name == 'workflow_dispatch'
+      startsWith(github.ref, 'refs/tags/preview-') ||
+      startsWith(github.ref, 'refs/tags/rc-') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["ios-firebase","full-release"]'), inputs.job))
     permissions:
       contents: read
     env:
@@ -500,16 +569,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: warm-sdk-linux
     timeout-minutes: 30
-    # Parity with ios-preview: tag-triggered or manual dispatch only,
-    # never on main pushes (per the 4B macOS-budget logic — for
-    # Android the budget pressure is lower but keeping the trigger
-    # shape symmetric makes the mental model easier).
+    # Parity with ios-preview: fires on preview-*/rc-* tag pushes OR
+    # explicit dispatch with job=android-firebase (or full-release).
+    # No main-push trigger.
     if: >-
-      (github.event_name == 'push' && (
-        startsWith(github.ref, 'refs/tags/preview-') ||
-        startsWith(github.ref, 'refs/tags/rc-')
-      )) ||
-      github.event_name == 'workflow_dispatch'
+      startsWith(github.ref, 'refs/tags/preview-') ||
+      startsWith(github.ref, 'refs/tags/rc-') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["android-firebase","full-release"]'), inputs.job))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -574,7 +641,13 @@ jobs:
     # cross-compile + bundleRelease + Play upload. With cache hits
     # the Play upload itself is the slowest step (~2-3 min).
     timeout-minutes: 45
-    if: startsWith(github.ref, 'refs/tags/release-')
+    # release-* tag push (full release pipeline) OR workflow_dispatch
+    # with job=android-internal (iterate Play Internal without tagging)
+    # or job=full-release (dry-run of the whole pipeline).
+    if: >-
+      startsWith(github.ref, 'refs/tags/release-') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["android-internal","full-release"]'), inputs.job))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -618,6 +691,15 @@ jobs:
           echo "PLAY_SERVICE_ACCOUNT_JSON_PATH=$RUNNER_TEMP/play-sa.json" >> "$GITHUB_ENV"
 
       - name: Compute version from tag
+        # GLOW_RELEASE_TAG override path (see ios-release step comment
+        # for rationale). On release-* tag push, GITHUB_REF_NAME is
+        # already correct and GLOW_RELEASE_TAG stays empty.
+        env:
+          GLOW_RELEASE_TAG: >-
+            ${{ (github.event_name == 'workflow_dispatch' &&
+                 contains(fromJSON('["android-internal","full-release"]'), inputs.job))
+                && format('release-{0}', inputs.version)
+                || '' }}
         run: ./scripts/ci/compute-version.sh
 
       - name: Generate release notes
@@ -694,12 +776,15 @@ jobs:
     # Fires on:
     # - release-* tag push: cuts the iOS side of a full release
     #   (paired with android-release + release-github).
-    # - workflow_dispatch with ios_hotfix=true: iOS-only hotfix
-    #   rebuild against whatever ref the dispatch targeted. Skips
-    #   android-release / release-github (they stay tag-gated).
+    # - workflow_dispatch with job=ios-testflight: iOS-only hotfix
+    #   rebuild against whatever ref the dispatch targeted, without
+    #   re-firing android-release / release-github.
+    # - workflow_dispatch with job=full-release: dry-run the full
+    #   pipeline without cutting a git tag.
     if: >-
       startsWith(github.ref, 'refs/tags/release-') ||
-      (github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true)
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["ios-testflight","full-release"]'), inputs.job))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -747,20 +832,21 @@ jobs:
         # signing both land on the post-sync project state.
         run: npx cap sync ios
 
-      # Validate release_version input when running as an iOS hotfix
-      # dispatch. compute-version.sh's actual override is applied via
-      # step-level `env:` below; this step only enforces input shape
-      # + required-ness so the error is loud + early.
-      - name: Validate ios_hotfix inputs
-        if: github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true
+      # Validate `version` input when running as a version-bearing
+      # dispatch (ios-testflight / full-release). compute-version.sh's
+      # actual override is applied via step-level `env:` below.
+      - name: Validate dispatch inputs
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          contains(fromJSON('["ios-testflight","full-release"]'), inputs.job)
         run: |
           set -euo pipefail
-          if [[ -z "${{ inputs.release_version }}" ]]; then
-            echo "::error::ios_hotfix=true requires release_version input (e.g., 0.0.2)"
+          if [[ -z "${{ inputs.version }}" ]]; then
+            echo "::error::job='${{ inputs.job }}' requires version input (e.g., 0.0.2)"
             exit 1
           fi
-          if ! [[ "${{ inputs.release_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::release_version '${{ inputs.release_version }}' must match MAJOR.MINOR.PATCH"
+          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version '${{ inputs.version }}' must match MAJOR.MINOR.PATCH"
             exit 1
           fi
 
@@ -772,8 +858,9 @@ jobs:
         # compute-version.sh consults first (see script header).
         env:
           GLOW_RELEASE_TAG: >-
-            ${{ (github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true)
-                && format('release-{0}', inputs.release_version)
+            ${{ (github.event_name == 'workflow_dispatch' &&
+                 contains(fromJSON('["ios-testflight","full-release"]'), inputs.job))
+                && format('release-{0}', inputs.version)
                 || '' }}
         run: ./scripts/ci/compute-version.sh
 
@@ -842,6 +929,11 @@ jobs:
           path: build/App.xcarchive
           retention-days: 7
 
+  # Publishes a GitHub Release tagged `release-X.Y.Z` with the AAB +
+  # IPA artifacts from the upstream jobs. ONLY fires on an actual
+  # release-* tag push — full-release dispatch builds the same
+  # artifacts but intentionally does NOT publish a GH Release (there
+  # is no tag to attach it to).
   release-github:
     name: Publish GitHub Release
     needs: [android-release, ios-release]
