@@ -48,11 +48,21 @@ runs:
           package-lock.json
           glow-web/package-lock.json
 
-    - name: Read pinned spark-sdk SHA
+    - name: Read pinned spark-sdk SHA + set SPARK_SDK_DIR
       id: sdk-sha
       shell: bash
+      # SPARK_SDK_DIR is placed INSIDE $GITHUB_WORKSPACE (not ../spark-sdk)
+      # so actions/cache accepts the paths. actions/cache@v5 rejects
+      # any path containing `..`:
+      #   "[warning]Invalid pattern '../spark-sdk/packages/wasm/...'.
+      #    Relative pathing '.' and '..' is not allowed."
+      # with those paths skipped silently from the save list. Keeping
+      # the checkout workspace-relative sidesteps that restriction.
+      # Makefile's `SPARK_SDK_DIR ?= $(abspath ../spark-sdk)` yields
+      # to the env var when exported.
       run: |
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+        echo "SPARK_SDK_DIR=$GITHUB_WORKSPACE/.spark-sdk-checkout" >> "$GITHUB_ENV"
 
     # Unified cache key per (OS, SHA) — warmer and consumer share it
     # verbatim. Previous platforms-slug scheme caused cache-miss for
@@ -73,8 +83,8 @@ runs:
       with:
         key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
-          ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
-          ../spark-sdk/crates/breez-sdk/bindings/langs/swift
+          .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+          .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
           ~/.m2/repository/breez_sdk_spark
 
     - name: Restore Spark SDK output artifacts (consumer mode)
@@ -84,8 +94,8 @@ runs:
       with:
         key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
-          ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
-          ../spark-sdk/crates/breez-sdk/bindings/langs/swift
+          .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+          .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
           ~/.m2/repository/breez_sdk_spark
 
     - name: Compute effective cache hit

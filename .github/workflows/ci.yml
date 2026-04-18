@@ -159,14 +159,19 @@ jobs:
 
       - name: Install glow-web deps + local Spark SDK tgz
         # The composite action restored the WASM tgz into
-        # ../spark-sdk/packages/wasm/. Resolve to an absolute path
-        # before `cd glow-web` — a relative `../spark-sdk/...` would
-        # resolve against the new PWD and land one directory off.
+        # $SPARK_SDK_DIR/packages/wasm/. The env var is exported
+        # from setup-glow-app so `make` + this script agree on the
+        # location (workspace-relative to avoid actions/cache's
+        # `..`-path rejection).
         # `npm install <tgz>` overlays it on @breeztech/breez-sdk-spark
         # without mutating the lockfile.
         run: |
           set -euo pipefail
-          TGZ="$(realpath ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz)"
+          TGZ="$SPARK_SDK_DIR/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz"
+          if [[ ! -f "$TGZ" ]]; then
+            echo "error: expected WASM tgz at $TGZ — warmer cache restore failed?" >&2
+            exit 1
+          fi
           echo "Installing local SDK: $TGZ"
           cd glow-web
           npm ci
