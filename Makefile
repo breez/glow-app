@@ -133,6 +133,28 @@ _sdk-ios-package:
 		$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
 	install_name_tool -id @rpath/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI \
 		$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/ios-arm64/breez_sdk_sparkFFI.framework/breez_sdk_sparkFFI
+	@# Strip `DebugSymbolsPath` from the xcframework's Info.plist. The
+	@# checked-in Info.plist declares `DebugSymbolsPath=dSYMs` because
+	@# spark-sdk's PUBLISHING workflows (.github/workflows/build-bindings-*.yml)
+	@# invoke dsymutil to generate per-slice dSYMs before packaging. The
+	@# local `make package-xcframework` target we use here does NOT
+	@# produce dSYMs, so the declared path doesn't exist — and Xcode 26
+	@# fails the build with: "Missing path (...) from XCFramework
+	@# 'breez_sdk_sparkFFI.xcframework' as defined by 'DebugSymbolsPath'".
+	@#
+	@# glow-app doesn't need symbolicated Rust stack frames in local /
+	@# unsigned CI builds (line-tables-only DWARF in our Rust binaries is
+	@# enough for `lldb` attaches), so stripping the declared path keeps
+	@# the xcframework consistent with what we actually produce. If we
+	@# ever need dSYMs here (e.g., to symbolicate TestFlight crash logs
+	@# on a CI-built release IPA), port dsymutil invocation from spark-sdk's
+	@# publish workflow into this target and drop this strip.
+	plutil -remove 'AvailableLibraries.0.DebugSymbolsPath' \
+		$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/Info.plist 2>/dev/null || true
+	plutil -remove 'AvailableLibraries.1.DebugSymbolsPath' \
+		$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/Info.plist 2>/dev/null || true
+	plutil -remove 'AvailableLibraries.2.DebugSymbolsPath' \
+		$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/Info.plist 2>/dev/null || true
 	@echo "iOS SDK ready"
 
 sdk-android: ## Build Spark SDK for Android and publish to mavenLocal
