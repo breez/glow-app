@@ -297,6 +297,48 @@ runs:
           esac
         done
 
+    # Strip `DebugSymbolsPath` from the xcframework's Info.plist.
+    #
+    # spark-sdk commit 04bf493b ("ship dSYMs with breez_sdk_sparkFFI.xcframework"
+    # #798) added `DebugSymbolsPath=dSYMs` to each AvailableLibraries entry in
+    # the checked-in Info.plist, expecting the three per-slice dSYM bundles to
+    # be produced by spark-sdk's PUBLISHING workflows (build-bindings-{ios,
+    # darwin}.yml + publish-swift.yml). The local `make package-xcframework`
+    # path used by `make sdk-ios` here does NOT run dsymutil — it only
+    # assembles the compiled .dylib into the committed framework skeleton.
+    # Xcode 26 strictly validates `DebugSymbolsPath` and fails the build
+    # with "Missing path (...) from XCFramework ... as defined by
+    # DebugSymbolsPath in its Info.plist".
+    #
+    # This step runs unconditionally whenever iOS is in the requested
+    # platforms, regardless of cache-hit status — putting it in the Makefile
+    # target `_sdk-ios-package` doesn't help on cache-hit runs because the
+    # target isn't executed (the xcframework is restored verbatim from cache,
+    # including the stale Info.plist that was cached BEFORE we added any
+    # strip).
+    #
+    # `plutil -remove` errors on missing keys, which would be the case after
+    # a fresh local build where _sdk-ios-package already stripped, or when
+    # running on a platform without the key — treat as no-op.
+    - name: Strip DebugSymbolsPath from xcframework Info.plist (iOS consumers)
+      if: contains(inputs.platforms, 'ios')
+      shell: bash
+      run: |
+        set -uo pipefail
+        PLIST="$SPARK_SDK_DIR/crates/breez-sdk/bindings/langs/swift/breez_sdk_sparkFFI.xcframework/Info.plist"
+        if [[ ! -f "$PLIST" ]]; then
+          echo "note: xcframework Info.plist not found at $PLIST (skipping strip)"
+          exit 0
+        fi
+        # Each AvailableLibraries entry has a DebugSymbolsPath; strip all
+        # three (ios-arm64, ios-arm64_x86_64-simulator, macos-arm64_x86_64).
+        for idx in 0 1 2; do
+          plutil -remove "AvailableLibraries.$idx.DebugSymbolsPath" "$PLIST" 2>/dev/null || true
+        done
+        # Report remaining DebugSymbolsPath occurrences (should be zero):
+        remaining=$(grep -c DebugSymbolsPath "$PLIST" || true)
+        echo "DebugSymbolsPath entries remaining in xcframework Info.plist: $remaining"
+
     - name: Report cache state
       shell: bash
       run: |
