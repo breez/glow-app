@@ -42,9 +42,26 @@ EXPORT_OPTIONS_PATH="$BUILD_DIR/exportOptions.plist"
 
 mkdir -p "$BUILD_DIR"
 
-# Minimal exportOptions.plist. The provisioning profile installed
-# by import-ios-cert.sh is auto-picked by xcodebuild once method
-# here matches the profile type.
+# Explicit exportOptions.plist with a provisioningProfiles map so
+# xcodebuild uses EXACTLY the profile we installed, rather than
+# falling back to the strict entitlement-intersection check that
+# rejects wildcard `*` profiles against apps declaring specific
+# domains (seen in Xcode 26 with Associated Domains capability).
+#
+# Use xcodebuild -showBuildSettings to resolve the configuration's
+# actual PRODUCT_BUNDLE_IDENTIFIER rather than parsing pbxproj by
+# object UUID (fragile — UUIDs are Xcode-generated).
+BUNDLE_ID="$(
+  xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration "$CONFIGURATION" -showBuildSettings 2>/dev/null \
+    | awk '$1 == "PRODUCT_BUNDLE_IDENTIFIER" {print $3; exit}'
+)"
+if [[ -z "$BUNDLE_ID" ]]; then
+  echo "error: could not resolve PRODUCT_BUNDLE_IDENTIFIER for $CONFIGURATION via xcodebuild -showBuildSettings" >&2
+  exit 1
+fi
+echo "Bundle ID for $CONFIGURATION: $BUNDLE_ID"
+echo "Profile specifier: ${PROVISIONING_PROFILE_SPECIFIER:-<unset>}"
+
 cat > "$EXPORT_OPTIONS_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -52,10 +69,19 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 <dict>
   <key>method</key>
   <string>${METHOD}</string>
+  <key>teamID</key>
+  <string>${DEVELOPMENT_TEAM:?DEVELOPMENT_TEAM must be set}</string>
   <key>compileBitcode</key>
   <false/>
   <key>signingStyle</key>
   <string>manual</string>
+  <key>signingCertificate</key>
+  <string>Apple Distribution</string>
+  <key>provisioningProfiles</key>
+  <dict>
+    <key>${BUNDLE_ID}</key>
+    <string>${PROVISIONING_PROFILE_SPECIFIER:?PROVISIONING_PROFILE_SPECIFIER must be set (run import-ios-cert.sh first)}</string>
+  </dict>
   <key>stripSwiftSymbols</key>
   <true/>
   <key>thinning</key>
@@ -63,6 +89,8 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 </dict>
 </plist>
 EOF
+echo "==> exportOptions.plist:"
+cat "$EXPORT_OPTIONS_PATH"
 
 echo "==> xcodebuild archive ($CONFIGURATION, method=$METHOD)"
 
