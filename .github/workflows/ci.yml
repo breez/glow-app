@@ -230,11 +230,6 @@ jobs:
           npm ci
           npm install "$TGZ" --no-save
 
-      - name: Install glow-app root deps (needed for `npx cap doctor`)
-        # `cap doctor` reads capacitor.config.ts + package.json at the
-        # glow-app root to validate plugin wiring + config schema.
-        run: npm ci --omit=optional
-
       - name: Typecheck
         run: cd glow-web && npx tsc --noEmit
 
@@ -244,12 +239,11 @@ jobs:
       - name: Unit tests
         run: cd glow-web && npm run test
 
-      - name: Capacitor config + plugin wiring validation (`npx cap doctor`)
-        # Validates capacitor.config.ts syntax + platform plugin sync.
-        # Cheap (~10s) and catches mis-wired plugins before someone
-        # dispatches an iOS/Android build that would fail with a
-        # confusing native error.
-        run: npx cap doctor
+      # NOTE: `npx cap doctor` was considered as an extra validation
+      # step but requires ./glow-web/dist to exist (deployment check,
+      # not pure static analysis). Adding it would force `make web`
+      # into the PR gate, which defeats the build-on-demand model.
+      # Plugin-wiring issues will be caught at the first build-dispatch.
 
       # Upload vitest coverage artifacts on failure for PR-page
       # drilldown without needing a CI re-run.
