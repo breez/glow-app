@@ -17,6 +17,36 @@ on:
     branches: [main]
     tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
+    inputs:
+      # iOS-only hotfix mode. Lets us cut a TestFlight build off any
+      # branch without retagging a release-* (which would also re-fire
+      # android-release, republish the GitHub Release, and bump the
+      # Play versionCode we don't want to bump).
+      #
+      # Expected workflow:
+      #   gh workflow run ci.yml --ref <branch-or-sha> \
+      #     -f ios_hotfix=true -f release_version=0.0.2
+      #
+      # - Runs warm-sdk-macos + iOS + ios-release (skips android-* and
+      #   release-github via their existing tag-only gates).
+      # - Synthesizes GITHUB_REF_NAME=release-<release_version> before
+      #   compute-version.sh so VERSION_NAME / VERSION_CODE come out
+      #   the same as a tag-driven release.
+      # - GITHUB_RUN_NUMBER monotonically increments across dispatches,
+      #   so each hotfix IPA gets a strictly-increasing CFBundleVersion
+      #   under the same CFBundleShortVersionString — TestFlight
+      #   accepts it as a new build for the existing marketing version.
+      #
+      # Designed for iterative builds (10+ per feature) during public
+      # beta — no tag pollution.
+      ios_hotfix:
+        description: 'iOS-only hotfix: upload TestFlight IPA, skip Android + GitHub Release'
+        type: boolean
+        default: false
+      release_version:
+        description: 'Semver for the hotfix (e.g. 0.0.2). Required when ios_hotfix=true.'
+        type: string
+        default: ''
 
 # Cancel superseded runs on the same PR / branch. Matches the glow-web
 # pattern and saves ~15–25% of minute burn on busy PRs (especially
@@ -661,7 +691,15 @@ jobs:
     # upload. ASC-side processing time is excluded
     # (skip_waiting_for_build_processing in Fastfile).
     timeout-minutes: 75
-    if: startsWith(github.ref, 'refs/tags/release-')
+    # Fires on:
+    # - release-* tag push: cuts the iOS side of a full release
+    #   (paired with android-release + release-github).
+    # - workflow_dispatch with ios_hotfix=true: iOS-only hotfix
+    #   rebuild against whatever ref the dispatch targeted. Skips
+    #   android-release / release-github (they stay tag-gated).
+    if: >-
+      startsWith(github.ref, 'refs/tags/release-') ||
+      (github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -708,6 +746,25 @@ jobs:
         # MARKETING_VERSION; running it first ensures version +
         # signing both land on the post-sync project state.
         run: npx cap sync ios
+
+      # On iOS-only hotfix dispatch, synthesize GITHUB_REF_NAME from
+      # the user-supplied release_version so compute-version.sh parses
+      # it as release-MAJOR.MINOR.PATCH the same way it does for a real
+      # tag. GITHUB_RUN_NUMBER naturally bumps on every dispatch so the
+      # CFBundleVersion stays monotonic for TestFlight.
+      - name: Synthesize GITHUB_REF_NAME for iOS hotfix dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ inputs.release_version }}" ]]; then
+            echo "::error::ios_hotfix=true requires release_version input (e.g., 0.0.2)"
+            exit 1
+          fi
+          if ! [[ "${{ inputs.release_version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release_version '${{ inputs.release_version }}' must match MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "GITHUB_REF_NAME=release-${{ inputs.release_version }}" >> "$GITHUB_ENV"
 
       - name: Compute version from tag
         run: ./scripts/ci/compute-version.sh
