@@ -202,47 +202,87 @@ make deploy-android   # build + install on connected Android device
 
 **WASM build fails with linked SDK**: `npm link` causes Vite polyfill resolution issues. Use the tgz install approach instead (`make web` handles this).
 
-## Continuous integration (Phase 4B)
+## Continuous integration
 
-GitHub Actions runs on every PR and on pushes to `main`. Four
-jobs plus Dependabot update PRs:
+### Trigger model (build-on-demand, static-analysis-by-default)
 
-| Job | Runner | When it runs | What it does |
-|-----|--------|--------------|--------------|
-| `web` | ubuntu | every PR / main push | `tsc --noEmit` + `npm run lint` + `npm run test` against the pinned glow-web submodule SHA |
-| `android` | ubuntu | every PR / main push | `gradle :app:assembleDebug`; uploads `app-debug.apk` (7-day retention) |
-| `ios` | macos-15 | main pushes + PRs labelled `run-ios` | `xcodebuild` unsigned device build |
-| `ios-preview` | macos-15 | `preview-*` / `rc-*` tags + manual dispatch | Archive + export IPA, upload to Firebase App Distribution |
+The previous "every PR + every push builds everything" model burned
+~2.9k billed minutes across a single 48-hour release cycle during
+Phase 4C's release-0.0.1 → release-0.0.2 iteration. Most of that work
+was redundant with what devs had already run locally before pushing.
 
-Plus **Dependabot** (`.github/dependabot.yml`) — weekly npm
-(×4), Gradle, and `github-actions` update PRs.
+Current model:
 
-> **CodeQL code scanning**: intentionally not shipped. Code
-> scanning on private repos requires GitHub Advanced Security,
-> which isn't included in Breez-org's plan tier. Revisit if
-> GHAS becomes available.
+| Trigger | What runs | Billed cost |
+|---|---|---|
+| PR open/push | `web` only — tsc + lint + vitest + `cap doctor` + glow-web-submodule-pushed-to-origin check | ~3–5 min Linux |
+| Push to `main` | **nothing** — admin-merged PRs already passed their gate | 0 |
+| `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB → Play Internal) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
+| `preview-*` / `rc-*` tag push | Firebase App Distribution: `ios-preview` + `android-preview` | ~250 min |
+| `workflow_dispatch` | Dev picks a `job` from a choice list (see table below) | varies |
+
+**Trade-off**: a broken Android or iOS build can merge to `main` without
+CI catching it. Release-tag push + explicit dispatch both catch it before
+users see it. Devs own local build validation via `make deploy-ios` /
+`make deploy-android` before pushing.
+
+### CI dispatch reference (self-serve builds)
+
+All build artifacts are produced on explicit dev intent, not auto-
+triggered. Dispatch via **GitHub UI** (Actions → CI → Run workflow)
+or `gh workflow run`:
+
+| `job` input | What it does | Needs `version`? | Upload target |
+|---|---|---|---|
+| `ios-unsigned` | iOS xcodebuild archive, no signing. Compile-only. | no | artifact |
+| `ios-firebase` | Ad-hoc signed IPA → Firebase App Distribution (`.dev` bundle) | no | Firebase AD |
+| `ios-testflight` | App-store signed IPA → TestFlight. The iterative hotfix target — dispatch as many times per feature as needed. Each dispatch gets a strictly-increasing `CFBundleVersion`. | **yes** | TestFlight |
+| `android-debug` | `assembleDebug`, APK artifact upload | no | artifact |
+| `android-firebase` | Debug APK → Firebase App Distribution (`.dev` bundle) | no | Firebase AD |
+| `android-internal` | `bundleRelease` AAB → Play Console Internal Testing (DRAFT) | **yes** | Play Internal |
+| `full-release` | Everything. Equivalent to a `release-*` tag push, minus the tag. Pre-release dry-run. | **yes** | Play + TestFlight |
+
+Example invocations:
+
+```bash
+# iOS hotfix TestFlight build for marketing version 0.0.2
+gh workflow run ci.yml --ref main \
+  -f job=ios-testflight -f version=0.0.2
+
+# Validate a PR branch builds on iOS before merging (no upload)
+gh workflow run ci.yml --ref feat/my-branch -f job=ios-unsigned
+
+# Dry-run the full release pipeline from main
+gh workflow run ci.yml --ref main \
+  -f job=full-release -f version=0.0.3
+```
+
+### Running iOS validation on a PR
+
+Add the `run-ios` label (UI or `gh pr edit N --add-label run-ios`).
+That triggers `warm-sdk-macos` + `ios` (unsigned) so the PR gets an
+iOS compile-check without needing a separate dispatch.
 
 ### Cutting a preview build
 
-iOS previews are distributed via Firebase App Distribution to
-the `internal` tester group. Triggers:
+`preview-*` and `rc-*` tag pushes fire `ios-preview` + `android-preview`
+(both → Firebase App Distribution). Manual equivalent via dispatch:
+`job=ios-firebase` or `job=android-firebase`.
 
 ```bash
-# Tag-based (recommended for scheduled drops)
 git tag preview-$(date +%Y%m%d)
 git push origin preview-$(date +%Y%m%d)
-
-# Or manual from the Actions UI:
-#   Actions → CI → Run workflow → main → ios-preview
 ```
 
-After the run, invitees receive a FAD email with an install
-link. Delete one-off test tags afterwards to keep the release
-list clean: `git push origin :refs/tags/preview-test1`.
+Delete one-off test tags afterwards: `git push origin :refs/tags/preview-test1`.
 
-### Running iOS on a PR
+### Dependabot + CodeQL
 
-Add the `run-ios` label (UI or `gh pr edit N --add-label run-ios`).
+- **Dependabot** (`.github/dependabot.yml`) — weekly npm (×4), Gradle,
+  and `github-actions` update PRs.
+- **CodeQL code scanning**: intentionally not shipped. Requires GitHub
+  Advanced Security, not included in Breez-org's plan tier. Revisit if
+  GHAS becomes available.
 Removing it mid-PR cancels the active run via concurrency. The
 `ios` job "skipped" status counts as passing for branch
 protection, so unlabelled PRs can still merge.
