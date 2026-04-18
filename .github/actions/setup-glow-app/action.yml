@@ -154,6 +154,27 @@ runs:
         echo "Expected key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}"
         exit 1
 
+    # Wipe any stale `.spark-sdk-checkout/` before cloning fresh on a
+    # cache miss. resolve-spark-sdk.sh's drift detection is intentionally
+    # strict — it errors out when HEAD doesn't match the pin, to catch
+    # LOCAL dev hand-bumps of `../spark-sdk` without updating
+    # `.spark-sdk-ref`. In CI this protection is counter-productive:
+    # a runner may surface a pre-existing `.spark-sdk-checkout/` from
+    # some caching layer (observed on ubuntu-latest with HEAD at a
+    # random SHA despite `actions/cache` reporting a miss), and the
+    # drift check then hard-fails the build.
+    #
+    # The right CI behavior on cache miss is "trust the pin, get it
+    # fresh" — this rm is the mechanical equivalent of that.
+    - name: Wipe stale SDK checkout before fresh clone (cache miss)
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
+      shell: bash
+      run: |
+        if [[ -e "$GITHUB_WORKSPACE/.spark-sdk-checkout" ]]; then
+          echo "Removing stale $GITHUB_WORKSPACE/.spark-sdk-checkout before fresh clone"
+          rm -rf "$GITHUB_WORKSPACE/.spark-sdk-checkout"
+        fi
+
     # Resolve (clone or verify) the spark-sdk checkout. Cheap on cache
     # hit (just verifies HEAD), a fresh clone on miss. Warmer only —
     # consumer mode never builds from source.
