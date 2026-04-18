@@ -10,9 +10,31 @@ description: >-
 inputs:
   platforms:
     description: >-
-      Comma-separated list of SDK platform targets to build on cache
-      miss. Valid values: wasm, android, ios. Example: "wasm,android".
+      Comma-separated list of SDK platform targets the caller needs.
+      Valid values: wasm, android, ios. Example: "wasm,android".
     required: true
+  mode:
+    description: >-
+      "warmer"   = populate the SDK artifact cache on miss. Installs
+                   the full Rust + wasm-pack + Android NDK + iOS
+                   Rust target toolchain, builds via `make sdk-*`,
+                   then the cache saves on job success. Use ONLY in
+                   dedicated warm-sdk-* jobs whose sole purpose is
+                   to populate caches.
+
+      "consumer" = cache-restore only. Does NOT install the build
+                   toolchain and does NOT invoke `make sdk-*` on
+                   miss — a miss is reported as a warning but the
+                   job continues (the downstream step consuming the
+                   cached artifacts will fail fast if actually
+                   missing, which is the correct loud-fail mode).
+                   Use in every job EXCEPT the warmers.
+
+      Default: "consumer". Backward-compat: existing callers that
+      didn't specify a mode get consumer semantics, which requires
+      a prior warm-sdk-* job in the workflow to populate the cache.
+    required: false
+    default: consumer
 
 runs:
   using: composite
@@ -37,24 +59,83 @@ runs:
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
         echo "platforms-slug=$(echo '${{ inputs.platforms }}' | tr ',' '+')" >> "$GITHUB_OUTPUT"
 
-    # Cache the *output artifacts* so the `make sdk-*` step below can
-    # be skipped entirely when the pinned SHA hasn't changed. The key
-    # includes the requested platforms so a wasm-only cache doesn't
-    # satisfy an ios-needing job.
-    - name: Cache Spark SDK output artifacts
-      id: sdk-artifacts-cache
+    # Warmer mode uses actions/cache (read+write). Consumer mode uses
+    # actions/cache/restore (read-only) so consumer jobs never save
+    # cache (the warmer is authoritative) and never fail on "cache
+    # already exists" conflicts from concurrent warmer jobs.
+    #
+    # restore-keys: a warmer job that built `wasm+android` for a given
+    # SHA writes a cache entry that a later job requesting just `wasm`
+    # can restore (the wasm tgz is the same bytes). Cross-platform
+    # reuse cuts the cold-start cost the first time a new SHA is seen.
+    - name: Cache Spark SDK output artifacts (warmer mode)
+      if: inputs.mode == 'warmer'
+      id: sdk-artifacts-cache-warmer
       uses: actions/cache@v5
       with:
         key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
+        restore-keys: |
+          sdk-artifacts-${{ runner.os }}-wasm+android+ios-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm+ios-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm+android-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm-${{ steps.sdk-sha.outputs.sha }}
         path: |
           ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
           ../spark-sdk/crates/breez-sdk/bindings/langs/swift
           ~/.m2/repository/breez_sdk_spark
 
+    - name: Restore Spark SDK output artifacts (consumer mode)
+      if: inputs.mode == 'consumer'
+      id: sdk-artifacts-cache-consumer
+      uses: actions/cache/restore@v5
+      with:
+        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
+        restore-keys: |
+          sdk-artifacts-${{ runner.os }}-wasm+android+ios-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm+ios-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm+android-${{ steps.sdk-sha.outputs.sha }}
+          sdk-artifacts-${{ runner.os }}-wasm-${{ steps.sdk-sha.outputs.sha }}
+        path: |
+          ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+          ../spark-sdk/crates/breez-sdk/bindings/langs/swift
+          ~/.m2/repository/breez_sdk_spark
+
+    - name: Compute effective cache hit
+      id: cache-hit
+      shell: bash
+      run: |
+        # Unify the two cache step outputs into a single boolean.
+        if [[ "${{ inputs.mode }}" == "warmer" ]]; then
+          echo "hit=${{ steps.sdk-artifacts-cache-warmer.outputs.cache-hit }}" >> "$GITHUB_OUTPUT"
+        else
+          # actions/cache/restore sets cache-hit=true on exact match,
+          # 'false' otherwise (even if a restore-key matched). We want
+          # to treat restore-key matches as hits for consumer purposes
+          # — the cached artifacts are there, just under a broader key.
+          # `cache-matched-key` is non-empty iff anything restored.
+          if [[ -n "${{ steps.sdk-artifacts-cache-consumer.outputs.cache-matched-key }}" ]]; then
+            echo "hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "hit=false" >> "$GITHUB_OUTPUT"
+          fi
+        fi
+
+    # Consumer-mode sanity: if cache missed entirely, warn loudly but
+    # don't fail the step — the downstream `make web` / gradle /
+    # xcodebuild invocations will fail fast when the missing artifact
+    # is needed, with a clearer error signal.
+    - name: Consumer-mode cache-miss warning
+      if: inputs.mode == 'consumer' && steps.cache-hit.outputs.hit != 'true'
+      shell: bash
+      run: |
+        echo "::warning::SDK artifact cache MISSED in consumer mode. Expected warm-sdk-${{ runner.os }} job to have populated it. Downstream steps WILL fail."
+        echo "Requested key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}"
+
     # Resolve (clone or verify) the spark-sdk checkout. Cheap on cache
-    # hit (just verifies HEAD), a fresh clone on miss.
+    # hit (just verifies HEAD), a fresh clone on miss. Warmer only —
+    # consumer mode never builds from source.
     - name: Resolve spark-sdk checkout
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       shell: bash
       run: ./scripts/resolve-spark-sdk.sh
 
@@ -62,7 +143,7 @@ runs:
     # rebuilds when the artifact cache missed but Cargo.lock is
     # unchanged (e.g., cache eviction without a SDK bump).
     - name: Rust compile cache (fallback on artifact-cache miss)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ../spark-sdk
@@ -82,7 +163,7 @@ runs:
     # statically-linked protoc with the WKTs baked in, works on
     # both Linux and macOS.
     - name: Install protoc (with well-known types)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       uses: arduino/setup-protoc@v3
       with:
         version: '25.x'
@@ -94,7 +175,7 @@ runs:
         repo-token: ${{ github.token }}
 
     - name: Install wasm-pack + wasm32 target (if WASM requested)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'wasm')
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'wasm')
       shell: bash
       run: |
         rustup target add wasm32-unknown-unknown
@@ -112,7 +193,7 @@ runs:
     - name: Install Homebrew LLVM (macOS WASM cross-compile)
       if: >-
         runner.os == 'macOS' &&
-        steps.sdk-artifacts-cache.outputs.cache-hit != 'true' &&
+        inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' &&
         contains(inputs.platforms, 'wasm')
       shell: bash
       run: |
@@ -128,7 +209,7 @@ runs:
         "$CLANG_PATH" --version | head -1
 
     - name: Setup Android SDK + NDK (if android requested)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'android')
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
       uses: android-actions/setup-android@v3
       with:
         cmdline-tools-version: 11076708
@@ -138,7 +219,7 @@ runs:
         packages: "ndk;26.1.10909125 build-tools;34.0.0 platform-tools"
 
     - name: Expose ANDROID_NDK_HOME + install cargo-ndk + Android Rust targets
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'android')
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
       shell: bash
       run: |
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
@@ -147,13 +228,13 @@ runs:
         cargo install cargo-ndk --locked --version '^3'
 
     - name: Install iOS Rust targets (if ios requested)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true' && contains(inputs.platforms, 'ios')
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'ios')
       shell: bash
       run: |
         rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 
     - name: Build Spark SDK (cache miss only)
-      if: steps.sdk-artifacts-cache.outputs.cache-hit != 'true'
+      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       shell: bash
       run: |
         set -euo pipefail
@@ -175,6 +256,7 @@ runs:
     - name: Report cache state
       shell: bash
       run: |
-        echo "SDK artifact cache hit: ${{ steps.sdk-artifacts-cache.outputs.cache-hit }}"
-        echo "Pinned SHA: ${{ steps.sdk-sha.outputs.sha }}"
-        echo "Requested platforms: ${{ inputs.platforms }}"
+        echo "Mode:                  ${{ inputs.mode }}"
+        echo "SDK artifact cache hit: ${{ steps.cache-hit.outputs.hit }}"
+        echo "Pinned SHA:            ${{ steps.sdk-sha.outputs.sha }}"
+        echo "Requested platforms:   ${{ inputs.platforms }}"

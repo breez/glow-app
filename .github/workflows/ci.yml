@@ -81,10 +81,61 @@ jobs:
               - 'scripts/**'
               - 'Makefile'
 
+  # Dedicated SDK "warmer" jobs — build the spark-sdk from source
+  # once per pinned SHA per OS, cache the output artifacts. Every
+  # downstream job `needs:`-waits for the matching warmer and runs
+  # setup-glow-app in consumer mode (cache-restore only, no
+  # toolchain install, no SDK build). On warm cache, the warmer is
+  # ~1-2 min (restore only) and downstream jobs skip setup-glow-app
+  # heavy lifting entirely. On cold cache (new SDK SHA), the SDK
+  # build cost is paid ONCE instead of per-job.
+  #
+  # Both warmers use CACHE_ON_FAILURE and save-on-exit semantics via
+  # actions/cache@v5's default behavior, so even if a downstream job
+  # later fails, the cache from the warmer remains for subsequent
+  # runs.
+  warm-sdk-linux:
+    name: Warm SDK cache (Linux — wasm + android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,android
+          mode: warmer
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+  warm-sdk-macos:
+    name: Warm SDK cache (macOS — wasm + ios)
+    runs-on: macos-15
+    timeout-minutes: 60
+    # Same gating as `ios` + tag-gated iOS jobs (ios-preview,
+    # ios-release): only burn macOS minutes when an iOS job will
+    # consume the cache.
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ios')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - run: sudo xcode-select -s /Applications/Xcode_26.3.app
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,ios
+          mode: warmer
+
   web:
     name: Web (glow-web submodule)
     runs-on: ubuntu-latest
-    needs: changes
+    needs: [changes, warm-sdk-linux]
     # Run on: any non-PR event (main pushes, tag pushes, manual
     # dispatch), OR on a PR where glow-web / npm root / plugin /
     # shared CI paths changed. Skipped = passing per branch
@@ -142,7 +193,7 @@ jobs:
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
-    needs: changes
+    needs: [changes, warm-sdk-linux]
     if: >-
       !cancelled() &&
       (github.event_name != 'pull_request' ||
@@ -214,6 +265,7 @@ jobs:
   ios:
     name: iOS (xcodebuild, unsigned)
     runs-on: macos-15
+    needs: warm-sdk-macos
     # 60 min cold-run headroom: iOS cross-compile is slower than
     # Android (~15 min), plus xcodebuild itself (~10 min on a cold
     # Pods cache). Warm runs with SDK + Pods cache hit are ~5 min.
@@ -262,6 +314,18 @@ jobs:
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
 
+      - name: Clear Swift PM artifacts cache (flake prevention)
+        # Xcode 26's Swift PM sometimes errors with:
+        #   "failed downloading 'https://github.com/ionic-team/capacitor
+        #    -swift-pm/releases/download/<ver>/Capacitor.xcframework.zip'
+        #    ... already exists in file system"
+        # when a partial/stale binary-target download is in
+        # ~/Library/Caches/org.swift.swiftpm. Clearing ensures a fresh
+        # resolve on each run. ~/Library/Developer/Xcode/DerivedData
+        # is also safe to nuke for consistency but only the swiftpm
+        # cache is the known flake vector.
+        run: rm -rf ~/Library/Caches/org.swift.swiftpm
+
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
@@ -294,6 +358,7 @@ jobs:
   ios-preview:
     name: iOS preview (Firebase App Distribution)
     runs-on: macos-15
+    needs: warm-sdk-macos
     # Same cold-run budget as the `ios` job plus FAD upload time.
     timeout-minutes: 60
     # Tag-triggered (preview-* / rc-*) or manually dispatched.
@@ -348,6 +413,18 @@ jobs:
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
 
+      - name: Clear Swift PM artifacts cache (flake prevention)
+        # Xcode 26's Swift PM sometimes errors with:
+        #   "failed downloading 'https://github.com/ionic-team/capacitor
+        #    -swift-pm/releases/download/<ver>/Capacitor.xcframework.zip'
+        #    ... already exists in file system"
+        # when a partial/stale binary-target download is in
+        # ~/Library/Caches/org.swift.swiftpm. Clearing ensures a fresh
+        # resolve on each run. ~/Library/Developer/Xcode/DerivedData
+        # is also safe to nuke for consistency but only the swiftpm
+        # cache is the known flake vector.
+        run: rm -rf ~/Library/Caches/org.swift.swiftpm
+
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
@@ -383,6 +460,7 @@ jobs:
   android-preview:
     name: Android preview (Firebase App Distribution)
     runs-on: ubuntu-latest
+    needs: warm-sdk-linux
     timeout-minutes: 30
     # Parity with ios-preview: tag-triggered or manual dispatch only,
     # never on main pushes (per the 4B macOS-budget logic — for
@@ -450,6 +528,7 @@ jobs:
   android-release:
     name: Android release (Play Internal)
     runs-on: ubuntu-latest
+    needs: warm-sdk-linux
     # Cold-run budget: web + WASM build + Android NDK + AAR
     # cross-compile + bundleRelease + Play upload. With cache hits
     # the Play upload itself is the slowest step (~2-3 min).
@@ -504,9 +583,24 @@ jobs:
         # GPP reads from the release-notes file path; we overwrite
         # the en-US/internal.txt placeholder with the git-log
         # output before publishReleaseBundle runs.
+        #
+        # Play caps release notes at 500 chars per locale. Longer
+        # notes cause GPP's edits:commit to fail with:
+        #   "The release created has notes in language en-US with
+        #    length N, which is too long (max: 500)"
+        # Truncate to 497 chars + "…" preserving the first few
+        # commit subjects (most recent work first, since git log
+        # output is newest-to-oldest by default).
         run: |
           set -euo pipefail
-          ./scripts/ci/release-notes.sh > android/app/src/main/play/release-notes/en-US/internal.txt
+          FULL_NOTES="$(./scripts/ci/release-notes.sh)"
+          if [[ ${#FULL_NOTES} -gt 500 ]]; then
+            SHORT_NOTES="${FULL_NOTES:0:497}…"
+          else
+            SHORT_NOTES="$FULL_NOTES"
+          fi
+          printf '%s\n' "$SHORT_NOTES" > android/app/src/main/play/release-notes/en-US/internal.txt
+          echo "=== Play internal.txt (truncated to ${#SHORT_NOTES} chars) ==="
           cat android/app/src/main/play/release-notes/en-US/internal.txt
 
       - name: Build glow-web dist/
@@ -547,6 +641,7 @@ jobs:
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
+    needs: warm-sdk-macos
     # Cold-run budget: web + WASM + iOS xframework cross-compile +
     # Pods install + xcodebuild archive + IPA export + TestFlight
     # upload. ASC-side processing time is excluded
@@ -589,6 +684,9 @@ jobs:
 
       - name: Install glow-app deps
         run: npm ci
+
+      - name: Clear Swift PM artifacts cache (flake prevention)
+        run: rm -rf ~/Library/Caches/org.swift.swiftpm
 
       - name: Capacitor sync (iOS)
         # Run BEFORE apply-ios-version + signing. cap sync rewrites
