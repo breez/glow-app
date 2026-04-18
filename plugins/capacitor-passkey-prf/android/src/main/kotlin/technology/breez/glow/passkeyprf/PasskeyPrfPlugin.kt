@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import technology.breez.spark.passkey.CredentialManagerPrfProvider
+import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PasskeyPrfException
 
 @CapacitorPlugin(name = "PasskeyPrf")
@@ -64,6 +65,47 @@ class PasskeyPrfPlugin : Plugin() {
                 call.reject(e.message ?: "PRF seed derivation failed", errorCode(e))
             }
         }
+    }
+
+    @PluginMethod
+    fun checkDomainAssociation(call: PluginCall) {
+        val provider = makeProvider(call)
+        scope.launch {
+            try {
+                val result = provider.checkDomainAssociation()
+                call.resolve(domainAssociationToJson(result))
+            } catch (e: Exception) {
+                // The SDK's checkDomainAssociation is documented to never
+                // throw — verification-level failures surface as Skipped.
+                // Catch defensively in case the SDK contract changes.
+                call.reject(e.message ?: "Domain association check failed", errorCode(e))
+            }
+        }
+    }
+
+    /**
+     * Serialize [DomainAssociation] into the JSObject tagged-union shape
+     * the Capacitor bridge expects. Mirrors the TypeScript
+     * `DomainAssociation` type one-to-one so callers on both platforms
+     * see the same payload.
+     */
+    private fun domainAssociationToJson(result: DomainAssociation): com.getcapacitor.JSObject {
+        val ret = com.getcapacitor.JSObject()
+        when (result) {
+            is DomainAssociation.Associated -> {
+                ret.put("kind", "Associated")
+            }
+            is DomainAssociation.NotAssociated -> {
+                ret.put("kind", "NotAssociated")
+                ret.put("source", result.source)
+                ret.put("reason", result.reason)
+            }
+            is DomainAssociation.Skipped -> {
+                ret.put("kind", "Skipped")
+                ret.put("reason", result.reason)
+            }
+        }
+        return ret
     }
 
     private fun makeProvider(call: PluginCall): CredentialManagerPrfProvider {

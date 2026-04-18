@@ -10,6 +10,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isPrfAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "createPasskey", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "derivePrfSeed", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "checkDomainAssociation", returnType: CAPPluginReturnPromise),
     ]
 
     @objc func isPrfAvailable(_ call: CAPPluginCall) {
@@ -62,6 +63,56 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         } else {
             call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+        }
+    }
+
+    @objc func checkDomainAssociation(_ call: CAPPluginCall) {
+        if #available(iOS 18.0, *) {
+            let provider = makeProvider(call)
+            Task {
+                do {
+                    let result = try await provider.checkDomainAssociation()
+                    call.resolve(Self.domainAssociationToDict(result))
+                } catch {
+                    // The SDK's checkDomainAssociation is documented to never
+                    // throw — it maps verification-level failures to .skipped.
+                    // Still, catch defensively so a future change in the SDK
+                    // contract doesn't crash the bridge.
+                    call.reject(error.localizedDescription, errorCode(error))
+                }
+            }
+        } else {
+            // Passkey PRF itself requires iOS 18+; on older iOS the app
+            // will never reach this code path. Return Skipped to preserve
+            // API parity if some caller probes anyway.
+            call.resolve([
+                "kind": "Skipped",
+                "reason": "iOS version below 18.0; passkey PRF is unsupported"
+            ])
+        }
+    }
+
+    /// Serialize a `DomainAssociation` enum into the JSON-shaped dict the
+    /// Capacitor bridge expects. Mirrors the TypeScript `DomainAssociation`
+    /// tagged-union one-to-one.
+    @available(iOS 18.0, *)
+    private static func domainAssociationToDict(
+        _ result: DomainAssociation
+    ) -> [String: Any] {
+        switch result {
+        case .associated:
+            return ["kind": "Associated"]
+        case .notAssociated(let source, let reason):
+            return [
+                "kind": "NotAssociated",
+                "source": source,
+                "reason": reason,
+            ]
+        case .skipped(let reason):
+            return [
+                "kind": "Skipped",
+                "reason": reason,
+            ]
         }
     }
 
