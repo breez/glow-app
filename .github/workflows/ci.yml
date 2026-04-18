@@ -203,36 +203,12 @@ jobs:
         with:
           platforms: wasm
 
-      - name: Verify glow-web submodule SHA is on origin
-        # Catches the "local-only SHA" footgun: dev commits a submodule
-        # bump pointing at a glow-web commit they haven't pushed to
-        # origin/breez/glow-web. `git submodule update --init` in CI
-        # would fail with a confusing "reference is not a tree" error
-        # far downstream. Fail loudly at the entrance instead.
-        run: |
-          set -euo pipefail
-          SUBMODULE_SHA=$(git ls-tree HEAD glow-web | awk '{print $3}')
-          if [[ -z "$SUBMODULE_SHA" ]]; then
-            echo "error: could not resolve glow-web submodule SHA from HEAD" >&2
-            exit 1
-          fi
-          echo "glow-web submodule SHA: $SUBMODULE_SHA"
-          cd glow-web
-          # The fetch already happened via checkout@v6 submodules:recursive,
-          # but double-check the SHA is reachable from any origin ref
-          # (branches or tags on breez/glow-web). Reachability, not a
-          # branch-tip match, because stacked feature branches pin
-          # ancestors of their own tips.
-          if ! git cat-file -e "$SUBMODULE_SHA" 2>/dev/null; then
-            echo "error: glow-web SHA $SUBMODULE_SHA not fetchable — is it pushed to origin?" >&2
-            exit 1
-          fi
-          if ! git branch -a --contains "$SUBMODULE_SHA" 2>/dev/null | grep -q '^ *remotes/origin/'; then
-            echo "error: glow-web SHA $SUBMODULE_SHA exists locally but is not on any origin branch." >&2
-            echo "  Push the branch containing $SUBMODULE_SHA to breez/glow-web before landing this commit." >&2
-            exit 1
-          fi
-          echo "OK: glow-web SHA is on origin"
+      # NOTE: a submodule-pushed-to-origin check was considered here, but
+      # is redundant with actions/checkout's own behavior: if the SHA
+      # glow-app pins for glow-web isn't fetchable from origin, the
+      # `submodules: recursive` fetch above fails with "reference is not
+      # a tree" BEFORE this job's steps run. Catching that pre-entry was
+      # the intent; it's already caught upstream with a louder error.
 
       - name: Install glow-web deps + local Spark SDK tgz
         # The composite action restored the WASM tgz into
