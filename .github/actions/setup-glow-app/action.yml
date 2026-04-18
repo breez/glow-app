@@ -48,37 +48,30 @@ runs:
           package-lock.json
           glow-web/package-lock.json
 
-    - name: Read pinned spark-sdk SHA + normalized platform slug
+    - name: Read pinned spark-sdk SHA
       id: sdk-sha
       shell: bash
-      # The platform input can contain commas (e.g. "wasm,android"),
-      # which actions/cache@v4 rejects in cache keys. Swap commas for
-      # plus signs so the slug round-trips to a valid key while still
-      # distinguishing "wasm" from "wasm+android".
       run: |
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-        echo "platforms-slug=$(echo '${{ inputs.platforms }}' | tr ',' '+')" >> "$GITHUB_OUTPUT"
 
-    # Warmer mode uses actions/cache (read+write). Consumer mode uses
-    # actions/cache/restore (read-only) so consumer jobs never save
-    # cache (the warmer is authoritative) and never fail on "cache
-    # already exists" conflicts from concurrent warmer jobs.
+    # Unified cache key per (OS, SHA) — warmer and consumer share it
+    # verbatim. Previous platforms-slug scheme caused cache-miss for
+    # consumers requesting `wasm` when the warmer saved `wasm+android`;
+    # GitHub's restore-keys are prefix-matched, not suffix-matched,
+    # so full alternate keys never matched.
     #
-    # restore-keys: a warmer job that built `wasm+android` for a given
-    # SHA writes a cache entry that a later job requesting just `wasm`
-    # can restore (the wasm tgz is the same bytes). Cross-platform
-    # reuse cuts the cold-start cost the first time a new SHA is seen.
+    # Warmer mode: actions/cache (read+write). Builds whatever the
+    # caller's `platforms` input lists on miss, saves cache on success.
+    # Consumer mode: actions/cache/restore (read-only). Restores
+    # whatever the warmer saved. Platforms input is ignored for
+    # cache-lookup purposes but still controls what gets warned-about
+    # if a specific platform's file isn't in the restored set.
     - name: Cache Spark SDK output artifacts (warmer mode)
       if: inputs.mode == 'warmer'
       id: sdk-artifacts-cache-warmer
       uses: actions/cache@v5
       with:
-        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
-        restore-keys: |
-          sdk-artifacts-${{ runner.os }}-wasm+android+ios-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm+ios-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm+android-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm-${{ steps.sdk-sha.outputs.sha }}
+        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
           ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
           ../spark-sdk/crates/breez-sdk/bindings/langs/swift
@@ -89,12 +82,7 @@ runs:
       id: sdk-artifacts-cache-consumer
       uses: actions/cache/restore@v5
       with:
-        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
-        restore-keys: |
-          sdk-artifacts-${{ runner.os }}-wasm+android+ios-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm+ios-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm+android-${{ steps.sdk-sha.outputs.sha }}
-          sdk-artifacts-${{ runner.os }}-wasm-${{ steps.sdk-sha.outputs.sha }}
+        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
           ../spark-sdk/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
           ../spark-sdk/crates/breez-sdk/bindings/langs/swift
@@ -104,32 +92,27 @@ runs:
       id: cache-hit
       shell: bash
       run: |
-        # Unify the two cache step outputs into a single boolean.
+        # Unified key — exact match only, no restore-keys in play.
+        # Both warmer and consumer report cache-hit true/false on
+        # the same single key.
         if [[ "${{ inputs.mode }}" == "warmer" ]]; then
           echo "hit=${{ steps.sdk-artifacts-cache-warmer.outputs.cache-hit }}" >> "$GITHUB_OUTPUT"
         else
-          # actions/cache/restore sets cache-hit=true on exact match,
-          # 'false' otherwise (even if a restore-key matched). We want
-          # to treat restore-key matches as hits for consumer purposes
-          # — the cached artifacts are there, just under a broader key.
-          # `cache-matched-key` is non-empty iff anything restored.
-          if [[ -n "${{ steps.sdk-artifacts-cache-consumer.outputs.cache-matched-key }}" ]]; then
-            echo "hit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "hit=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "hit=${{ steps.sdk-artifacts-cache-consumer.outputs.cache-hit }}" >> "$GITHUB_OUTPUT"
         fi
 
-    # Consumer-mode sanity: if cache missed entirely, warn loudly but
-    # don't fail the step — the downstream `make web` / gradle /
-    # xcodebuild invocations will fail fast when the missing artifact
-    # is needed, with a clearer error signal.
-    - name: Consumer-mode cache-miss warning
+    # Consumer-mode sanity: if cache missed entirely, fail loudly.
+    # Previous implementation only warned, but that deferred the
+    # error to confusing downstream "realpath: file not found"
+    # messages. Better to halt in consumer mode so the operator
+    # sees exactly what's missing.
+    - name: Consumer-mode cache-miss error
       if: inputs.mode == 'consumer' && steps.cache-hit.outputs.hit != 'true'
       shell: bash
       run: |
-        echo "::warning::SDK artifact cache MISSED in consumer mode. Expected warm-sdk-${{ runner.os }} job to have populated it. Downstream steps WILL fail."
-        echo "Requested key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}"
+        echo "::error::SDK artifact cache MISS in consumer mode. The warm-sdk-${{ runner.os }} job should have populated the cache BEFORE this job started. Check whether the warmer succeeded for SHA ${{ steps.sdk-sha.outputs.sha }}."
+        echo "Expected key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}"
+        exit 1
 
     # Resolve (clone or verify) the spark-sdk checkout. Cheap on cache
     # hit (just verifies HEAD), a fresh clone on miss. Warmer only —
@@ -147,7 +130,7 @@ runs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ../spark-sdk
-        key: ${{ steps.sdk-sha.outputs.platforms-slug }}-${{ steps.sdk-sha.outputs.sha }}
+        key: ${{ inputs.platforms }}-${{ steps.sdk-sha.outputs.sha }}
 
     # Toolchain pieces needed to build the SDK from source on a
     # cold cache. The `make sdk-*` targets invoke cargo + wasm-pack
