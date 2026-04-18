@@ -625,7 +625,7 @@ jobs:
         run: ./scripts/ci/import-ios-cert.sh
 
       - name: Archive + export IPA (Release, app-store)
-        run: ./scripts/ci/build-ios-ipa.sh Release app-store
+        run: ./scripts/ci/build-ios-ipa.sh Release app-store-connect
 
       - name: Upload to TestFlight via fastlane
         working-directory: ios/App
