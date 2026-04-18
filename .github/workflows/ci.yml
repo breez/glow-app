@@ -747,12 +747,11 @@ jobs:
         # signing both land on the post-sync project state.
         run: npx cap sync ios
 
-      # On iOS-only hotfix dispatch, synthesize GITHUB_REF_NAME from
-      # the user-supplied release_version so compute-version.sh parses
-      # it as release-MAJOR.MINOR.PATCH the same way it does for a real
-      # tag. GITHUB_RUN_NUMBER naturally bumps on every dispatch so the
-      # CFBundleVersion stays monotonic for TestFlight.
-      - name: Synthesize GITHUB_REF_NAME for iOS hotfix dispatch
+      # Validate release_version input when running as an iOS hotfix
+      # dispatch. compute-version.sh's actual override is applied via
+      # step-level `env:` below; this step only enforces input shape
+      # + required-ness so the error is loud + early.
+      - name: Validate ios_hotfix inputs
         if: github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true
         run: |
           set -euo pipefail
@@ -764,9 +763,18 @@ jobs:
             echo "::error::release_version '${{ inputs.release_version }}' must match MAJOR.MINOR.PATCH"
             exit 1
           fi
-          echo "GITHUB_REF_NAME=release-${{ inputs.release_version }}" >> "$GITHUB_ENV"
 
       - name: Compute version from tag
+        # GitHub Actions silently ignores attempts to override default
+        # env vars like GITHUB_REF_NAME via $GITHUB_ENV — so the initial
+        # ios-hotfix dispatch shipped a build versioned 0.0.0. Pass the
+        # override via our own GLOW_RELEASE_TAG env var, which
+        # compute-version.sh consults first (see script header).
+        env:
+          GLOW_RELEASE_TAG: >-
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.ios_hotfix == true)
+                && format('release-{0}', inputs.release_version)
+                || '' }}
         run: ./scripts/ci/compute-version.sh
 
       - name: Apply version to iOS project

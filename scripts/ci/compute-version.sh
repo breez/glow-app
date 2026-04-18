@@ -18,12 +18,24 @@
 #   slots per semver before collision, which is overkill in
 #   practice but cheap insurance.
 #
+# Override precedence:
+#   1. $GLOW_RELEASE_TAG  — workflow-settable. MUST be used when a CI
+#      step needs to impersonate a release-tag push (iOS-only hotfix
+#      dispatch is the canonical case). GitHub Actions silently ignores
+#      attempts to set GITHUB_REF_NAME via $GITHUB_ENV because it's a
+#      default env var — which broke the first iOS hotfix dispatch and
+#      shipped a CFBundleShortVersionString of 0.0.0 to TestFlight.
+#      Prefer this var for anything that wants to lie about the ref.
+#   2. $GITHUB_REF_NAME   — what GitHub exports natively on tag pushes.
+#   3. release-0.0.0-dev  — local dev fallback.
+#
 # Local invocation:
 #   GITHUB_REF_NAME=release-0.1.0 GITHUB_RUN_NUMBER=42 ./scripts/ci/compute-version.sh
+#   GLOW_RELEASE_TAG=release-0.1.0 ./scripts/ci/compute-version.sh
 
 set -euo pipefail
 
-TAG="${GITHUB_REF_NAME:-release-0.0.0-dev}"
+TAG="${GLOW_RELEASE_TAG:-${GITHUB_REF_NAME:-release-0.0.0-dev}}"
 
 if [[ "$TAG" =~ ^release-([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
   MAJOR="${BASH_REMATCH[1]}"
