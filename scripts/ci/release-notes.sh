@@ -44,8 +44,13 @@ fi
 echo "$HEADER"
 echo ""
 
+# awk instead of `head -40` because `head` closes its stdin after
+# reading 40 lines, causing git log to receive SIGPIPE → exit 141.
+# Combined with set -o pipefail at the top of this script, that
+# aborts the whole pipeline on long histories. awk consumes the
+# full stream and filters, avoiding the SIGPIPE race.
 git log "$RANGE" \
   --pretty=format:'- %s' \
   --no-merges \
   --invert-grep --grep='^chore(release):' \
-  | head -40
+  | awk 'NR<=40'

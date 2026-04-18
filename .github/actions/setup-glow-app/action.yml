@@ -64,6 +64,36 @@ runs:
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
         echo "SPARK_SDK_DIR=$GITHUB_WORKSPACE/.spark-sdk-checkout" >> "$GITHUB_ENV"
 
+    # Create a compat symlink at $GITHUB_WORKSPACE/../spark-sdk →
+    # $GITHUB_WORKSPACE/.spark-sdk-checkout so downstream tooling with
+    # hardcoded `../spark-sdk` paths keeps working. Notably:
+    #
+    #   plugins/capacitor-passkey-prf/Package.swift:
+    #     let sdkPath = "../../../spark-sdk/crates/breez-sdk/bindings/langs/swift"
+    #
+    # From the perspective of that Package.swift, `../../../spark-sdk`
+    # resolves to $GITHUB_WORKSPACE/../spark-sdk — outside the
+    # workspace. We can't easily env-drive that path (Swift PM
+    # literals don't expand env vars), so the compat symlink is the
+    # minimal intrusion. Also leaves local dev unchanged (devs keep
+    # their `../spark-sdk` sibling-dir layout).
+    - name: Create compat symlink ../spark-sdk → .spark-sdk-checkout
+      shell: bash
+      run: |
+        TARGET="$GITHUB_WORKSPACE/.spark-sdk-checkout"
+        LINK="$GITHUB_WORKSPACE/../spark-sdk"
+        # Create target dir before symlink-pointing at it; cache
+        # restore / resolve-spark-sdk.sh may or may not have run yet.
+        mkdir -p "$TARGET"
+        # If LINK exists and is a regular dir (e.g., a dev env where
+        # spark-sdk was cloned there for real), leave it alone.
+        if [[ -e "$LINK" && ! -L "$LINK" ]]; then
+          echo "warning: $LINK exists as non-symlink; leaving in place" >&2
+        else
+          ln -sfn "$TARGET" "$LINK"
+          echo "Compat symlink: $LINK → $TARGET"
+        fi
+
     # Unified cache key per (OS, SHA) — warmer and consumer share it
     # verbatim. Previous platforms-slug scheme caused cache-miss for
     # consumers requesting `wasm` when the warmer saved `wasm+android`;
