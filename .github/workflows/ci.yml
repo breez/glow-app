@@ -26,19 +26,21 @@ name: CI
 #   - Tag `preview-*` /
 #     `rc-*`              → Firebase App Distribution uploads (iOS +
 #                           Android preview jobs). Explicit intent.
-#   - workflow_dispatch   → Pick a `job` from the choice list below.
-#                           Each dev can self-serve any build from the
-#                           GitHub UI without poking the workflow.
+#   - workflow_dispatch   → Pick `target` (ios|android|both) ×
+#                           `distribution` (none|firebase|store) inputs
+#                           below. `version` is required when
+#                           distribution=store. `dry_run` skips the
+#                           upload step for store-bound builds.
 #
 # Trade-off: a broken Android build could merge to main without CI
 # noticing. Release tag push still catches it loudly before artifacts
 # reach users. Between releases, devs own catching build regressions
 # locally before pushing. If this proves too loose in practice, a
-# weekly `schedule: cron` health-check of job=full-release (minus
-# uploads — needs a dry_run flag to add) would catch silent drift
-# within 7 days at ~450 billed min/week.
+# weekly `schedule: cron` health-check of
+# `target=both distribution=store version=X.Y.Z dry_run=true` would
+# catch silent drift within 7 days at ~450 billed min/week.
 #
-# See DEVELOPMENT.md "CI dispatch reference" for the job-choice table.
+# See DEVELOPMENT.md "CI dispatch reference" for the preset table.
 # ---------------------------------------------------------------------------
 on:
   pull_request:
@@ -54,36 +56,53 @@ on:
     tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
     inputs:
-      job:
-        description: 'Which build to run'
+      # target × distribution is the orthogonal replacement for the
+      # older single `job` enum. Every combination maps to exactly
+      # one set of platform jobs; `version` gates store uploads;
+      # `dry_run` flips store builds into "produce the artifact,
+      # skip the upload" for pre-release verification.
+      target:
+        description: 'Platform to build'
         type: choice
         required: true
-        default: 'ios-testflight'
+        default: 'ios'
         options:
-          # Compile-check only, no upload. Useful for catching iOS build
-          # regressions without burning a TestFlight slot.
-          - ios-unsigned
-          # Ad-hoc signed IPA → Firebase App Distribution (current ios-preview).
-          # Uses the .dev bundle ID + ad-hoc provisioning profile.
-          - ios-firebase
-          # App-store signed IPA → TestFlight. The iterative hotfix target
-          # — dispatch this as many times per feature as you need. Each
-          # dispatch gets a strictly-increasing CFBundleVersion, TestFlight
-          # accepts them all under the same marketing version.
-          - ios-testflight
-          # assembleDebug + APK artifact upload. No signing, no distribution.
-          - android-debug
-          # Debug APK → Firebase App Distribution (.dev bundle ID).
-          - android-firebase
-          # bundleRelease AAB → Play Console Internal Testing (DRAFT).
-          - android-internal
-          # Everything. Equivalent to a release-* tag push without the
-          # tag itself. Use as a pre-release dry-run.
-          - full-release
+          - ios
+          - android
+          - both
+      distribution:
+        description: 'Where to send the build'
+        type: choice
+        required: true
+        default: 'none'
+        options:
+          # No upload. Unsigned debug/compile-only build for sanity-checking.
+          #   target=ios     → xcodebuild unsigned (was `ios-unsigned`).
+          #   target=android → assembleDebug + APK artifact (was `android-debug`).
+          #   target=both    → fires both unsigned jobs in parallel.
+          - none
+          # Firebase App Distribution — ad-hoc signed IPA (iOS) or
+          # debug APK (Android) against the `.dev` bundle IDs.
+          #   target=ios     → was `ios-firebase`.
+          #   target=android → was `android-firebase`.
+          #   target=both    → fires both preview uploads.
+          - firebase
+          # Store-bound release. TestFlight (iOS app-store signed) +
+          # Play Internal (Android AAB). Requires `version`.
+          #   target=ios     → was `ios-testflight`.
+          #   target=android → was `android-internal`.
+          #   target=both    → was `full-release`. Use with dry_run=true
+          #                    to verify the full release pipeline without
+          #                    uploading.
+          - store
       version:
-        description: 'Marketing version (required for ios-testflight, android-internal, full-release — e.g. 0.0.2)'
+        description: 'Marketing version MAJOR.MINOR.PATCH — required when distribution=store (e.g. 0.0.2)'
         type: string
         default: ''
+      dry_run:
+        description: 'Build + sign but skip the upload step (only meaningful when distribution=store)'
+        type: boolean
+        default: false
 
 # Cancel superseded runs on the same PR / branch. Matches the glow-web
 # pattern and saves ~15–25% of minute burn on busy PRs (especially
@@ -102,7 +121,7 @@ jobs:
   # restructured to build-on-demand. PRs now always run the web static-
   # analysis gate (tsc + lint + vitest + cap doctor + submodule check),
   # and the expensive build jobs (android/ios) never fire on PR events
-  # — they're moved to workflow_dispatch (see `inputs.job`).
+  # — they're moved to workflow_dispatch (see the `target` / `distribution` inputs).
 
   # Dedicated SDK "warmer" jobs — build the spark-sdk from source
   # once per pinned SHA per OS, cache the output artifacts. Every
@@ -120,8 +139,9 @@ jobs:
   # Fires whenever any Linux-consuming downstream job will run. On a PR
   # that's the web static-analysis job (needs the WASM tgz to `npm
   # install` glow-web's SDK dep); on a release-* tag it's android +
-  # android-release; on a dispatch it's whichever Linux-needing job
-  # the `inputs.job` choice maps to.
+  # android-release; on a dispatch it's any run that includes android
+  # (target=android|both) — also covers the target=both distribution=store
+  # case, since the `web` gate runs there too.
   warm-sdk-linux:
     name: Warm SDK cache (Linux — wasm + android)
     runs-on: ubuntu-latest
@@ -130,8 +150,7 @@ jobs:
       github.event_name == 'pull_request' ||
       startsWith(github.ref, 'refs/tags/') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android-debug","android-firebase","android-internal","full-release"]'),
-                inputs.job))
+       contains(fromJSON('["android","both"]'), inputs.target))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -146,7 +165,7 @@ jobs:
           java-version: '21'
 
   # Only fires when an iOS build will consume the xcframework. Never on
-  # docs PRs, never on dispatch for Android-only `inputs.job` choices.
+  # docs PRs, never on dispatch for target=android.
   warm-sdk-macos:
     name: Warm SDK cache (macOS — wasm + ios)
     runs-on: macos-15
@@ -155,8 +174,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'run-ios') ||
       startsWith(github.ref, 'refs/tags/') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios-unsigned","ios-firebase","ios-testflight","full-release"]'),
-                inputs.job))
+       contains(fromJSON('["ios","both"]'), inputs.target))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -190,7 +208,8 @@ jobs:
       !cancelled() &&
       (github.event_name == 'pull_request' ||
        startsWith(github.ref, 'refs/tags/') ||
-       (github.event_name == 'workflow_dispatch' && inputs.job == 'full-release'))
+       (github.event_name == 'workflow_dispatch' &&
+        inputs.target == 'both' && inputs.distribution == 'store'))
     # Cold-run: build the WASM SDK from source (~10 min) + install
     # glow-web deps + run tsc/eslint/vitest. Warm cache: ~3 min total.
     timeout-minutes: 20
@@ -257,8 +276,10 @@ jobs:
   # Android debug APK compile + artifact upload. Does NOT fire on PR
   # events or main pushes — devs test locally via `make deploy-android`
   # before pushing. Triggered explicitly on:
-  #   - release-* tag push (release pipeline pre-flight)
-  #   - workflow_dispatch with job=android-debug or job=full-release
+  #   - release-* tag push (release pipeline pre-flight — fires in parallel
+  #     with android-release to produce a debug APK artifact alongside the
+  #     store-signed AAB)
+  #   - workflow_dispatch with target=android|both AND distribution=none
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
@@ -267,7 +288,8 @@ jobs:
       !cancelled() &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
-        contains(fromJSON('["android-debug","full-release"]'), inputs.job)))
+        contains(fromJSON('["android","both"]'), inputs.target) &&
+        inputs.distribution == 'none'))
     # 45 min is cold-run headroom: first run builds the WASM SDK
     # (~10 min) + Android NDK install (~3 min) + Android AAR
     # cross-compile (~5 min) + glow-web vite build (~3 min) +
@@ -351,7 +373,8 @@ jobs:
     if: >-
       contains(github.event.pull_request.labels.*.name, 'run-ios') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios-unsigned","full-release"]'), inputs.job))
+       contains(fromJSON('["ios","both"]'), inputs.target) &&
+       inputs.distribution == 'none')
     steps:
       - uses: actions/checkout@v6
         with:
@@ -439,15 +462,16 @@ jobs:
     # in plan-4b Step 10 assumes a maintainer-chosen cadence to
     # stay inside Free/Pro/Team macOS-minute quotas.
     # Fires on preview-*/rc-* tag pushes OR explicit workflow_dispatch
-    # with job=ios-firebase (or full-release). Explicitly NOT fired on
-    # ios-testflight dispatch — the .dev ad-hoc provisioning profile
-    # is currently broken (see DEVELOPMENT.md follow-ups), so only
-    # trigger the upload path when the dev explicitly asks for it.
+    # with target=ios|both AND distribution=firebase. Explicitly NOT
+    # fired when distribution=store — the .dev ad-hoc provisioning
+    # profile is currently broken (see DEVELOPMENT.md follow-ups), so
+    # only trigger the upload path when the dev explicitly asks for it.
     if: >-
       startsWith(github.ref, 'refs/tags/preview-') ||
       startsWith(github.ref, 'refs/tags/rc-') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios-firebase","full-release"]'), inputs.job))
+       contains(fromJSON('["ios","both"]'), inputs.target) &&
+       inputs.distribution == 'firebase')
     permissions:
       contents: read
     env:
@@ -540,13 +564,14 @@ jobs:
     needs: warm-sdk-linux
     timeout-minutes: 30
     # Parity with ios-preview: fires on preview-*/rc-* tag pushes OR
-    # explicit dispatch with job=android-firebase (or full-release).
+    # explicit dispatch with target=android|both AND distribution=firebase.
     # No main-push trigger.
     if: >-
       startsWith(github.ref, 'refs/tags/preview-') ||
       startsWith(github.ref, 'refs/tags/rc-') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android-firebase","full-release"]'), inputs.job))
+       contains(fromJSON('["android","both"]'), inputs.target) &&
+       inputs.distribution == 'firebase')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -612,12 +637,13 @@ jobs:
     # the Play upload itself is the slowest step (~2-3 min).
     timeout-minutes: 45
     # release-* tag push (full release pipeline) OR workflow_dispatch
-    # with job=android-internal (iterate Play Internal without tagging)
-    # or job=full-release (dry-run of the whole pipeline).
+    # with target=android|both AND distribution=store. Pair with
+    # dry_run=true to verify the upload pipeline without publishing.
     if: >-
       startsWith(github.ref, 'refs/tags/release-') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android-internal","full-release"]'), inputs.job))
+       contains(fromJSON('["android","both"]'), inputs.target) &&
+       inputs.distribution == 'store')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -667,7 +693,7 @@ jobs:
         env:
           GLOW_RELEASE_TAG: >-
             ${{ (github.event_name == 'workflow_dispatch' &&
-                 contains(fromJSON('["android-internal","full-release"]'), inputs.job))
+                 inputs.distribution == 'store')
                 && format('release-{0}', inputs.version)
                 || '' }}
         run: ./scripts/ci/compute-version.sh
@@ -746,15 +772,17 @@ jobs:
     # Fires on:
     # - release-* tag push: cuts the iOS side of a full release
     #   (paired with android-release + release-github).
-    # - workflow_dispatch with job=ios-testflight: iOS-only hotfix
-    #   rebuild against whatever ref the dispatch targeted, without
-    #   re-firing android-release / release-github.
-    # - workflow_dispatch with job=full-release: dry-run the full
-    #   pipeline without cutting a git tag.
+    # - workflow_dispatch with target=ios distribution=store: iOS-only
+    #   hotfix rebuild against whatever ref the dispatch targeted,
+    #   without re-firing android-release / release-github.
+    # - workflow_dispatch with target=both distribution=store: fires
+    #   alongside android-release. Pair with dry_run=true to verify
+    #   the full release pipeline without uploading.
     if: >-
       startsWith(github.ref, 'refs/tags/release-') ||
       (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios-testflight","full-release"]'), inputs.job))
+       contains(fromJSON('["ios","both"]'), inputs.target) &&
+       inputs.distribution == 'store')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -802,17 +830,17 @@ jobs:
         # signing both land on the post-sync project state.
         run: npx cap sync ios
 
-      # Validate `version` input when running as a version-bearing
-      # dispatch (ios-testflight / full-release). compute-version.sh's
-      # actual override is applied via step-level `env:` below.
+      # Validate `version` input when running as a store-bound dispatch.
+      # compute-version.sh's actual override is applied via step-level
+      # `env:` below.
       - name: Validate dispatch inputs
         if: >-
           github.event_name == 'workflow_dispatch' &&
-          contains(fromJSON('["ios-testflight","full-release"]'), inputs.job)
+          inputs.distribution == 'store'
         run: |
           set -euo pipefail
           if [[ -z "${{ inputs.version }}" ]]; then
-            echo "::error::job='${{ inputs.job }}' requires version input (e.g., 0.0.2)"
+            echo "::error::distribution=store requires version input (e.g., 0.0.2)"
             exit 1
           fi
           if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -829,7 +857,7 @@ jobs:
         env:
           GLOW_RELEASE_TAG: >-
             ${{ (github.event_name == 'workflow_dispatch' &&
-                 contains(fromJSON('["ios-testflight","full-release"]'), inputs.job))
+                 inputs.distribution == 'store')
                 && format('release-{0}', inputs.version)
                 || '' }}
         run: ./scripts/ci/compute-version.sh
@@ -901,9 +929,9 @@ jobs:
 
   # Publishes a GitHub Release tagged `release-X.Y.Z` with the AAB +
   # IPA artifacts from the upstream jobs. ONLY fires on an actual
-  # release-* tag push — full-release dispatch builds the same
-  # artifacts but intentionally does NOT publish a GH Release (there
-  # is no tag to attach it to).
+  # release-* tag push — a target=both distribution=store dispatch
+  # builds the same artifacts but intentionally does NOT publish a GH
+  # Release (there is no tag to attach it to).
   release-github:
     name: Publish GitHub Release
     needs: [android-release, ios-release]
