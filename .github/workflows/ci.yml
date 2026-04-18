@@ -246,6 +246,9 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
+      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
+        run: ./scripts/ci/warmup-gradle-wrapper.sh android
+
       - name: Gradle assembleDebug
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
@@ -506,6 +509,9 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
+      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
+        run: ./scripts/ci/warmup-gradle-wrapper.sh android
+
       - name: Gradle assembleDebug
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
@@ -618,6 +624,9 @@ jobs:
 
       - name: Capacitor sync (Android)
         run: npx cap sync android
+
+      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
+        run: ./scripts/ci/warmup-gradle-wrapper.sh android
 
       - name: Gradle bundleRelease + publish
         env:
