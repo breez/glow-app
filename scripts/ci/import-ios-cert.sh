@@ -66,15 +66,39 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN
 echo "==> Installing provisioning profile"
 PROFILES_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
 mkdir -p "$PROFILES_DIR"
-UUID="$(security cms -D -i "$PROFILE_PATH" | plutil -extract UUID xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')"
+
+# Extract metadata from the decoded profile plist. xcodebuild needs
+# Profile Name (or UUID) + Team ID to select the right profile when
+# we switch to Manual signing (default xcodebuild errors with
+# "Signing for App requires a development team" otherwise).
+PROFILE_PLIST="$(security cms -D -i "$PROFILE_PATH")"
+UUID="$(echo "$PROFILE_PLIST" | plutil -extract UUID xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')"
+PROFILE_NAME="$(echo "$PROFILE_PLIST" | plutil -extract Name xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')"
+TEAM_ID="$(echo "$PROFILE_PLIST" | plutil -extract TeamIdentifier.0 xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')"
 cp "$PROFILE_PATH" "$PROFILES_DIR/$UUID.mobileprovision"
 
-echo "==> iOS ad-hoc signing artifacts installed"
-echo "    Keychain: $KEYCHAIN_PATH"
-echo "    Profile UUID: $UUID"
+echo "==> iOS signing artifacts installed"
+echo "    Keychain:       $KEYCHAIN_PATH"
+echo "    Profile UUID:   $UUID"
+echo "    Profile Name:   $PROFILE_NAME"
+echo "    Team ID:        $TEAM_ID"
 
 # Emit GitHub Actions outputs if running in a GHA step.
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  echo "keychain-path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
-  echo "profile-uuid=$UUID"           >> "$GITHUB_OUTPUT"
+  {
+    echo "keychain-path=$KEYCHAIN_PATH"
+    echo "profile-uuid=$UUID"
+    echo "profile-name=$PROFILE_NAME"
+    echo "team-id=$TEAM_ID"
+  } >> "$GITHUB_OUTPUT"
+fi
+
+# Also export to GITHUB_ENV so downstream xcodebuild invocations can
+# read them without cross-step outputs. build-ios-ipa.sh uses these
+# to construct the Manual-signing build setting overrides.
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  {
+    echo "PROVISIONING_PROFILE_SPECIFIER=$PROFILE_NAME"
+    echo "DEVELOPMENT_TEAM=$TEAM_ID"
+  } >> "$GITHUB_ENV"
 fi

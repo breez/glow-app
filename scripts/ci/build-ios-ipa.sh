@@ -56,6 +56,36 @@ cat > "$EXPORT_OPTIONS_PATH" <<EOF
 EOF
 
 echo "==> xcodebuild archive ($CONFIGURATION, method=$METHOD)"
+
+# Manual signing via the pre-installed profile. import-ios-cert.sh
+# (upstream CI step) extracts the profile Name + Team ID from the
+# .mobileprovision and exports them to GITHUB_ENV; we read them here
+# and pass them as xcodebuild build-setting overrides.
+#
+# The committed pbxproj has `CODE_SIGN_STYLE = Automatic` (Xcode
+# default for new Capacitor projects) + no DEVELOPMENT_TEAM, so
+# xcodebuild fails without these overrides:
+#
+#   "Signing for App requires a development team. Select a
+#    development team in the Signing & Capabilities editor."
+#
+# We DON'T touch the pbxproj — this pattern lets devs keep the
+# project open in Xcode with automatic signing for local dev while
+# CI forces deterministic manual signing.
+#
+# -allowProvisioningUpdates is intentionally NOT passed: we want CI
+# to fail loudly if the installed profile doesn't match, rather than
+# silently downloading a new one from Apple (which would require
+# ASC credentials we're not always providing).
+XCODE_BUILD_SETTINGS=(
+  "CODE_SIGN_STYLE=Manual"
+  "DEVELOPMENT_TEAM=${DEVELOPMENT_TEAM:?DEVELOPMENT_TEAM must be set (run import-ios-cert.sh first)}"
+  "PROVISIONING_PROFILE_SPECIFIER=${PROVISIONING_PROFILE_SPECIFIER:?PROVISIONING_PROFILE_SPECIFIER must be set (run import-ios-cert.sh first)}"
+  # "Apple Distribution" matches both ad-hoc and app-store certs;
+  # our single cert is of this exact identity.
+  "CODE_SIGN_IDENTITY=Apple Distribution"
+)
+
 # Pipe through xcpretty when available for human-readable output, but
 # don't mask xcodebuild's exit code when it's missing. The previous
 # `| xcpretty || true` swallowed both xcpretty-missing AND archive
@@ -68,7 +98,7 @@ if command -v xcpretty >/dev/null 2>&1; then
     -configuration "$CONFIGURATION" \
     -destination "generic/platform=iOS" \
     -archivePath "$ARCHIVE_PATH" \
-    -allowProvisioningUpdates \
+    "${XCODE_BUILD_SETTINGS[@]}" \
     | xcpretty
 else
   xcodebuild archive \
@@ -77,7 +107,7 @@ else
     -configuration "$CONFIGURATION" \
     -destination "generic/platform=iOS" \
     -archivePath "$ARCHIVE_PATH" \
-    -allowProvisioningUpdates
+    "${XCODE_BUILD_SETTINGS[@]}"
 fi
 
 echo "==> xcodebuild -exportArchive"
