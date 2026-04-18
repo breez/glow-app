@@ -8,14 +8,19 @@
 #
 # Arguments:
 #   $1  configuration — Debug | Release (default: Debug)
-#   $2  export method — ad-hoc | app-store (default: ad-hoc)
+#   $2  export method — ad-hoc | app-store-connect (default: ad-hoc)
 #
 # Export method maps to downstream distribution:
-#   ad-hoc     → Firebase App Distribution (ios-preview job)
-#   app-store  → TestFlight (ios-release job)
+#   ad-hoc              → Firebase App Distribution (ios-preview job)
+#   app-store-connect   → TestFlight (ios-release job)
 # The installed provisioning profile MUST match the chosen method
-# (ad-hoc profile for ad-hoc export, app-store profile for app-store
-# export) or xcodebuild will fail to find a usable profile.
+# (ad-hoc profile for ad-hoc export, App-Store-distribution profile
+# for app-store-connect export) or xcodebuild fails to find a
+# usable profile.
+#
+# `app-store` is a deprecated alias kept for backward compat; Apple
+# renamed it to `app-store-connect` in Xcode 26.x and emits a
+# deprecation warning. We silently remap to the new name.
 
 set -euo pipefail
 
@@ -23,8 +28,12 @@ CONFIGURATION="${1:-Debug}"
 METHOD="${2:-ad-hoc}"
 
 case "$METHOD" in
-  ad-hoc|app-store) ;;
-  *) echo "error: unsupported method '$METHOD' (expected ad-hoc | app-store)" >&2; exit 2 ;;
+  ad-hoc|app-store-connect) ;;
+  app-store)
+    echo "warning: method 'app-store' is deprecated; auto-mapping to 'app-store-connect' (Xcode 26+)" >&2
+    METHOD="app-store-connect"
+    ;;
+  *) echo "error: unsupported method '$METHOD' (expected ad-hoc | app-store-connect)" >&2; exit 2 ;;
 esac
 
 BUILD_DIR="build"
