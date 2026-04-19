@@ -1,0 +1,61 @@
+name: Report billable cost
+description: >-
+  Appends a billable-cost line to $GITHUB_STEP_SUMMARY for the calling
+  job. macOS runners bill at 10× Linux on GitHub-hosted runners; this
+  action captures the multiplier + wall time + derived billable min so
+  30-day aggregation via the Actions API (queries step summaries) can
+  drive data-informed decisions on macOS minute spend (see
+  DEVELOPMENT.md "CI observability").
+
+  USAGE — every job that wants to be tracked must:
+
+    1. Set $JOB_START in its env via an early step, e.g.
+         - run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+       Placing this step at the TOP of the job captures queueing as
+       well as execution time.
+
+    2. Reference this action at the END of the job with `if: always()`
+       so billable-cost data lands even on failed/cancelled runs:
+         - uses: ./.github/actions/report-billable-cost
+           if: always()
+
+  If $JOB_START is unset (step was skipped or the job never ran it),
+  the action exits silently — no noise, just no data point.
+
+runs:
+  using: composite
+  steps:
+    - name: Compute and report billable cost
+      shell: bash
+      run: |
+        set -uo pipefail
+        if [[ -z "${JOB_START:-}" ]]; then
+          echo "note: JOB_START unset; skipping billable-cost report"
+          exit 0
+        fi
+
+        ELAPSED=$(( $(date +%s) - JOB_START ))
+        # Ceil to whole minutes — billing is also rounded up.
+        MINUTES=$(( (ELAPSED + 59) / 60 ))
+
+        # GitHub-hosted runner billing multipliers (as of 2026-04):
+        #   Linux        → 1×
+        #   Windows      → 2×
+        #   macOS        → 10×
+        # Large / larger runners have their own rates; we only use
+        # standard-size here, so the simple switch is accurate.
+        MULT=1
+        case "${RUNNER_OS:-}" in
+          macOS)   MULT=10 ;;
+          Windows) MULT=2 ;;
+        esac
+
+        BILLABLE=$(( MINUTES * MULT ))
+
+        {
+          echo "### Billable cost"
+          echo ""
+          echo "- Runner: \`${RUNNER_OS:-unknown}\` (×${MULT})"
+          echo "- Wall time: ${MINUTES} min (${ELAPSED}s)"
+          echo "- **Billable: ${BILLABLE} min**"
+        } >> "$GITHUB_STEP_SUMMARY"

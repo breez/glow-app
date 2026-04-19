@@ -139,6 +139,9 @@ jobs:
     timeout-minutes: 2
     if: github.event_name == 'workflow_dispatch'
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - name: Enforce input combinations
         env:
           TARGET:       ${{ inputs.target }}
@@ -164,6 +167,9 @@ jobs:
           fi
 
           echo "::notice::validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
+
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
 
   # Linux-side probe of the macOS SDK artifact cache. Runs on a 1×
   # ubuntu runner before any macOS VM spins up and sets an output
@@ -206,6 +212,9 @@ jobs:
     outputs:
       ios-cache-hit: ${{ steps.set-output.outputs.ios-cache-hit }}
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       # Submodules omitted — we only need `.spark-sdk-ref` from the
       # top-level repo to derive the cache key, not the glow-web tree
       # or the Pods it'd pull in.
@@ -254,6 +263,9 @@ jobs:
             echo "::notice::macOS SDK cache MISS or error (hit='${hit:-}') for sha=${{ steps.sdk-sha.outputs.sha }} — warm-sdk-macos will run"
           fi
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   # Dedicated SDK "warmer" jobs — build the spark-sdk from source
   # once per pinned SHA per OS, cache the output artifacts. Every
   # downstream job `needs:`-waits for the matching warmer and runs
@@ -285,6 +297,9 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target)))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -296,6 +311,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
 
   # Only fires when an iOS build will consume the xcframework AND the
   # preflight probe did NOT confirm a macOS SDK cache hit. The
@@ -321,6 +339,9 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target)))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -329,6 +350,9 @@ jobs:
         with:
           platforms: wasm,ios
           mode: warmer
+
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
 
   # The static-analysis gate for every PR. Always runs. Covers:
   #   - tsc --noEmit on glow-web
@@ -360,6 +384,9 @@ jobs:
     # glow-web deps + run tsc/eslint/vitest. Warm cache: ~3 min total.
     timeout-minutes: 20
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -419,6 +446,9 @@ jobs:
           path: glow-web/coverage/**/*.json
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   # Android debug APK compile + artifact upload. Does NOT fire on PR
   # events or main pushes — devs test locally via `make deploy-android`
   # before pushing. Triggered explicitly on:
@@ -444,6 +474,9 @@ jobs:
     # are ~8 min.
     timeout-minutes: 45
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -504,6 +537,9 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   ios:
     name: iOS (xcodebuild, unsigned)
     runs-on: macos-15
@@ -524,6 +560,9 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'none'))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -599,6 +638,9 @@ jobs:
           path: xcodebuild.log
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   ios-preview:
     name: iOS preview (Firebase App Distribution)
     runs-on: macos-15
@@ -629,6 +671,9 @@ jobs:
       P12_PASSWORD: ${{ secrets.IOS_PREVIEW_CERT_P12_PASSWORD }}
       PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PREVIEW_PROFILE_BASE64 }}
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -701,6 +746,9 @@ jobs:
           path: build/App.xcarchive
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   # ---------------------------------------------------------------
   # Phase 4C jobs below. preview-* / rc-* tags add Android FAD;
   # release-* tags fan out to android-release + ios-release, then
@@ -723,6 +771,9 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'firebase'))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -778,6 +829,9 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   android-release:
     name: Android release (Play Internal)
     runs-on: ubuntu-latest
@@ -796,6 +850,9 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -911,6 +968,9 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
@@ -936,6 +996,9 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -1061,6 +1124,9 @@ jobs:
           path: build/App.xcarchive
           retention-days: 7
 
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
+
   # Publishes a GitHub Release tagged `release-X.Y.Z` with the AAB +
   # IPA artifacts from the upstream jobs. ONLY fires on an actual
   # release-* tag push — a target=both distribution=store dispatch
@@ -1075,6 +1141,9 @@ jobs:
       # softprops/action-gh-release needs write to mutate releases.
       contents: write
     steps:
+      - name: Mark job start
+        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -1100,3 +1169,6 @@ jobs:
             artifacts/**/*.ipa
           prerelease: false
           make_latest: true
+
+      - uses: ./.github/actions/report-billable-cost
+        if: always()
