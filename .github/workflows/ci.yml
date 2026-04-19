@@ -563,6 +563,8 @@ jobs:
     # when the dev wants CI to confirm the iOS build still compiles.
     if: >-
       needs.validate-inputs.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'cancelled' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
@@ -666,6 +668,8 @@ jobs:
     # only trigger the upload path when the dev explicitly asks for it.
     if: >-
       needs.validate-inputs.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'cancelled' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -999,6 +1003,8 @@ jobs:
     #   the full release pipeline without uploading.
     if: >-
       needs.validate-inputs.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'failure' &&
+      needs.warm-sdk-macos.result != 'cancelled' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
