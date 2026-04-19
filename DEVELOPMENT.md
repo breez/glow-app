@@ -219,7 +219,7 @@ Current model:
 | Push to `main` | **nothing** — admin-merged PRs already passed their gate | 0 |
 | `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB → Play Internal) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
 | `preview-*` / `rc-*` tag push | Firebase App Distribution: `ios-preview` + `android-preview` | ~250 min |
-| `workflow_dispatch` | Dev picks a `job` from a choice list (see table below) | varies |
+| `workflow_dispatch` | Dev picks `target` × `distribution` × `version` × `dry_run` inputs (see table below) | varies |
 
 **Trade-off**: a broken Android or iOS build can merge to `main` without
 CI catching it. Release-tag push + explicit dispatch both catch it before
@@ -232,29 +232,42 @@ All build artifacts are produced on explicit dev intent, not auto-
 triggered. Dispatch via **GitHub UI** (Actions → CI → Run workflow)
 or `gh workflow run`:
 
-| `job` input | What it does | Needs `version`? | Upload target |
+**Inputs**
+
+| Input | Values | Required | Notes |
 |---|---|---|---|
-| `ios-unsigned` | iOS xcodebuild archive, no signing. Compile-only. | no | artifact |
-| `ios-firebase` | Ad-hoc signed IPA → Firebase App Distribution (`.dev` bundle) | no | Firebase AD |
-| `ios-testflight` | App-store signed IPA → TestFlight. The iterative hotfix target — dispatch as many times per feature as needed. Each dispatch gets a strictly-increasing `CFBundleVersion`. | **yes** | TestFlight |
-| `android-debug` | `assembleDebug`, APK artifact upload | no | artifact |
-| `android-firebase` | Debug APK → Firebase App Distribution (`.dev` bundle) | no | Firebase AD |
-| `android-internal` | `bundleRelease` AAB → Play Console Internal Testing (DRAFT) | **yes** | Play Internal |
-| `full-release` | Everything. Equivalent to a `release-*` tag push, minus the tag. Pre-release dry-run. | **yes** | Play + TestFlight |
+| `target` | `ios` \| `android` \| `both` | yes | Platform(s) to build. `both` fires the matching iOS + Android jobs in parallel. |
+| `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play Internal (Android). |
+| `version` | `MAJOR.MINOR.PATCH` | only when `distribution=store` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
+| `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store`. Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
+
+**Preset scenarios** (old `job` enum → new input combo)
+
+| Intent | `target` | `distribution` | `version` | `dry_run` |
+|---|---|---|---|---|
+| iOS compile-check (was `ios-unsigned`) | `ios` | `none` | — | — |
+| iOS Firebase (was `ios-firebase`) | `ios` | `firebase` | — | — |
+| iOS TestFlight hotfix (was `ios-testflight`) | `ios` | `store` | `0.0.2` | — |
+| Android debug APK (was `android-debug`) | `android` | `none` | — | — |
+| Android Firebase (was `android-firebase`) | `android` | `firebase` | — | — |
+| Android Play Internal (was `android-internal`) | `android` | `store` | `0.0.2` | — |
+| Full release dry-run (was `full-release`) | `both` | `store` | `0.0.3` | `true` |
+| Full release (pre-tag verification) | `both` | `store` | `0.0.3` | `false` |
 
 Example invocations:
 
 ```bash
 # iOS hotfix TestFlight build for marketing version 0.0.2
 gh workflow run ci.yml --ref main \
-  -f job=ios-testflight -f version=0.0.2
+  -f target=ios -f distribution=store -f version=0.0.2
 
 # Validate a PR branch builds on iOS before merging (no upload)
-gh workflow run ci.yml --ref feat/my-branch -f job=ios-unsigned
+gh workflow run ci.yml --ref feat/my-branch \
+  -f target=ios -f distribution=none
 
-# Dry-run the full release pipeline from main
+# Dry-run the full release pipeline from main (build + sign, no upload)
 gh workflow run ci.yml --ref main \
-  -f job=full-release -f version=0.0.3
+  -f target=both -f distribution=store -f version=0.0.3 -f dry_run=true
 ```
 
 ### Running iOS validation on a PR
@@ -267,7 +280,7 @@ iOS compile-check without needing a separate dispatch.
 
 `preview-*` and `rc-*` tag pushes fire `ios-preview` + `android-preview`
 (both → Firebase App Distribution). Manual equivalent via dispatch:
-`job=ios-firebase` or `job=android-firebase`.
+`target=ios distribution=firebase` or `target=android distribution=firebase`.
 
 ```bash
 git tag preview-$(date +%Y%m%d)
@@ -655,6 +668,23 @@ the tag locally + remotely and re-push — the
 `(RUN_NUMBER % 1000)` suffix in the versionCode formula
 guarantees the new build's versionCode is unique even on the
 same semver, so Play won't reject the duplicate.
+
+Local script note: `scripts/ci/compute-version.sh` hard-fails
+if neither `GLOW_RELEASE_TAG` nor `GITHUB_REF_NAME` resolves to
+a well-formed `release-MAJOR.MINOR.PATCH` tag. The previous
+silent `0.0.0-dev` fallback was removed after it shipped a
+`0.0.0` IPA to TestFlight on 2026-04-18. CI sets these
+automatically; for local smoke tests, export the tag explicitly:
+
+```bash
+GLOW_RELEASE_TAG=release-0.1.0 ./scripts/ci/compute-version.sh
+```
+
+Dispatch-level input validation runs upfront in the
+`validate-inputs` job (< 30s on a Linux runner) before any
+macOS runner spins up, catching invalid combinations (e.g.
+`distribution=store` without `version`, malformed `version`)
+before the pipeline burns minutes on doomed builds.
 
 ## Branch protection (Phase 4B)
 

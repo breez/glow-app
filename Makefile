@@ -36,7 +36,12 @@ endif
 endif
 
 # Device IDs (override with: make deploy-ios IOS_DEVICE_ID=xxx)
-IOS_DEVICE_ID ?= $(shell xcrun xctrace list devices 2>/dev/null | grep -m1 'iPhone.*(' | sed 's/.*(\(.*\))/\1/')
+# Make counts parens inside $(shell ...) regardless of shell quoting, so a
+# literal `(` in the grep pattern unbalances the call and errors with
+# "unterminated call to function 'shell': missing ')'". Wrap the pattern
+# in a var so Make sees balanced $(VAR) rather than a bare `(`.
+IOS_DEVICE_GREP := iPhone.*(
+IOS_DEVICE_ID ?= $(shell xcrun xctrace list devices 2>/dev/null | grep -m1 '$(IOS_DEVICE_GREP)' | sed 's/.*(\(.*\))/\1/')
 ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | awk '{print $$1}')
 
 # ---------- High-level targets ----------
