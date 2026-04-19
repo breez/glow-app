@@ -165,6 +165,95 @@ jobs:
 
           echo "::notice::validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
 
+  # Linux-side probe of the macOS SDK artifact cache. Runs on a 1×
+  # ubuntu runner before any macOS VM spins up and sets an output
+  # that `warm-sdk-macos` reads via `needs.preflight.outputs.ios-cache-hit`.
+  #
+  # Why Linux can probe a macOS cache: GitHub's cache service is
+  # OS-agnostic at the lookup level — the cache key (sdk-artifacts-
+  # macOS-<SHA>) is just a string. Only the cached PAYLOAD is
+  # macOS-specific (xcframework paths). `lookup-only: true` checks
+  # existence without downloading anything.
+  #
+  # Savings: ~2–3 macOS min × 10× billing per iOS run on a warm-cache
+  # path. Before this job, warm-sdk-macos would spin up a macos-15 VM
+  # just to verify the cache existed (the composite action's consumer-
+  # mode restore takes ~1-2 min on macOS start). Now that's a <10s
+  # lookup on a Linux runner.
+  #
+  # Fail-open: `continue-on-error` on the probe step + an explicit
+  # output-setting step mean any failure yields `ios-cache-hit=''`,
+  # which `warm-sdk-macos` reads as "not a confirmed hit" → warmer
+  # runs. We never regress correctness, only skip when we're sure.
+  #
+  # 7-day cache eviction: GitHub evicts caches after 7 days of no
+  # access. A cold-cache event is therefore surfaced EARLIER (at the
+  # preflight's `::notice::` output) than the old model, where the
+  # miss surfaced mid-warmer. Legibility win even on cold paths.
+  preflight:
+    name: Preflight (probe macOS SDK cache from Linux)
+    runs-on: ubuntu-latest
+    needs: [validate-inputs]
+    timeout-minutes: 2
+    # Runs iff warm-sdk-macos might run. Skipped otherwise so PRs
+    # without run-ios + dispatches for android-only stay Linux-only.
+    if: >-
+      needs.validate-inputs.result != 'failure' &&
+      (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+       startsWith(github.ref, 'refs/tags/') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["ios","both"]'), inputs.target)))
+    outputs:
+      ios-cache-hit: ${{ steps.set-output.outputs.ios-cache-hit }}
+    steps:
+      # Submodules omitted — we only need `.spark-sdk-ref` from the
+      # top-level repo to derive the cache key, not the glow-web tree
+      # or the Pods it'd pull in.
+      - uses: actions/checkout@v6
+
+      - name: Read pinned SDK SHA
+        id: sdk-sha
+        # Must match the composite action's `grep -vE '^\s*(#|$)'`
+        # logic verbatim — any divergence yields a miss-shaped hash
+        # and defeats the whole preflight.
+        run: |
+          echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Probe macOS SDK artifact cache
+        id: probe
+        # `continue-on-error: true` is the fail-open mechanism: a cache
+        # service blip, auth glitch, or typo'd key yields an error here
+        # but doesn't fail the job. The next step sees an empty
+        # `cache-hit` and writes `ios-cache-hit=''` downstream, which
+        # warm-sdk-macos reads as "not a confirmed hit" → runs anyway.
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          # Must match warm-sdk-macos's key exactly. The composite
+          # action constructs `sdk-artifacts-${{ runner.os }}-<SHA>`
+          # where runner.os evaluates to "macOS" on the macos-15 VM;
+          # we hardcode "macOS" here since we're probing from Linux.
+          key: sdk-artifacts-macOS-${{ steps.sdk-sha.outputs.sha }}
+          # Paths must be specified for cache/restore to run but are
+          # not used under `lookup-only: true` (no download happens).
+          # Mirror the composite action's paths for clarity.
+          path: |
+            .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+            .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
+            ~/.m2/repository/breez_sdk_spark
+          lookup-only: true
+
+      - name: Set ios-cache-hit output
+        id: set-output
+        run: |
+          hit="${{ steps.probe.outputs.cache-hit }}"
+          echo "ios-cache-hit=${hit:-}" >> "$GITHUB_OUTPUT"
+          if [[ "$hit" == "true" ]]; then
+            echo "::notice::macOS SDK cache HIT for sha=${{ steps.sdk-sha.outputs.sha }} — skipping warm-sdk-macos"
+          else
+            echo "::notice::macOS SDK cache MISS or error (hit='${hit:-}') for sha=${{ steps.sdk-sha.outputs.sha }} — warm-sdk-macos will run"
+          fi
+
   # Dedicated SDK "warmer" jobs — build the spark-sdk from source
   # once per pinned SHA per OS, cache the output artifacts. Every
   # downstream job `needs:`-waits for the matching warmer and runs
@@ -208,15 +297,25 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-  # Only fires when an iOS build will consume the xcframework. Never on
-  # docs PRs, never on dispatch for target=android.
+  # Only fires when an iOS build will consume the xcframework AND the
+  # preflight probe did NOT confirm a macOS SDK cache hit. The
+  # `preflight.outputs.ios-cache-hit != 'true'` check is the cost
+  # optimization — a Linux runner verified existence first, so we
+  # skip the ~3 macOS min the composite action's consumer restore
+  # would otherwise burn just to confirm what preflight already knew.
+  #
+  # Consumer iOS jobs (ios, ios-preview, ios-release) still restore
+  # the cache inline via setup-glow-app — this skip only saves the
+  # dedicated "verify only" macOS round-trip, not the actual restore
+  # by the build job.
   warm-sdk-macos:
     name: Warm SDK cache (macOS — wasm + ios)
     runs-on: macos-15
-    needs: [validate-inputs]
+    needs: [validate-inputs, preflight]
     timeout-minutes: 60
     if: >-
       needs.validate-inputs.result != 'failure' &&
+      needs.preflight.outputs.ios-cache-hit != 'true' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
