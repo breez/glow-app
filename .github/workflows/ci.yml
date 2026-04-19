@@ -123,6 +123,48 @@ jobs:
   # and the expensive build jobs (android/ios) never fire on PR events
   # — they're moved to workflow_dispatch (see the `target` / `distribution` inputs).
 
+  # Gate on workflow_dispatch input combinations. Catches invalid combos
+  # (distribution=store with no version, malformed version, etc.) in
+  # <30s on a Linux runner before any macOS runner spins up. Wired into
+  # every dispatch-reachable job's `needs:` so an invalid dispatch can't
+  # burn ~200 macOS min before the first build step notices the problem.
+  #
+  # Skipped on tag pushes + PR events — the `github.event_name` gate
+  # keeps it off the hot path. Downstream jobs use
+  # `needs.validate-inputs.result != 'failure'` so a skipped validate
+  # (non-dispatch event) doesn't cascade into a skip.
+  validate-inputs:
+    name: Validate dispatch inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Enforce input combinations
+        env:
+          TARGET:       ${{ inputs.target }}
+          DISTRIBUTION: ${{ inputs.distribution }}
+          VERSION:      ${{ inputs.version }}
+          DRY_RUN:      ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+          warn() { echo "::warning::$1"; }
+
+          if [[ "$DISTRIBUTION" == "store" ]]; then
+            [[ -n "$VERSION" ]] || fail "distribution=store requires version input (MAJOR.MINOR.PATCH, e.g. 0.0.2)"
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must match MAJOR.MINOR.PATCH, got: '$VERSION'"
+          fi
+
+          if [[ -n "$VERSION" && "$DISTRIBUTION" != "store" ]]; then
+            warn "version='$VERSION' ignored — only distribution=store uses version"
+          fi
+
+          if [[ "$DRY_RUN" == "true" && "$DISTRIBUTION" != "store" ]]; then
+            warn "dry_run=true ignored — only distribution=store has an upload step to skip"
+          fi
+
+          echo "::notice::validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
+
   # Dedicated SDK "warmer" jobs — build the spark-sdk from source
   # once per pinned SHA per OS, cache the output artifacts. Every
   # downstream job `needs:`-waits for the matching warmer and runs
@@ -145,12 +187,14 @@ jobs:
   warm-sdk-linux:
     name: Warm SDK cache (Linux — wasm + android)
     runs-on: ubuntu-latest
+    needs: [validate-inputs]
     timeout-minutes: 30
     if: >-
-      github.event_name == 'pull_request' ||
-      startsWith(github.ref, 'refs/tags/') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android","both"]'), inputs.target))
+      needs.validate-inputs.result != 'failure' &&
+      (github.event_name == 'pull_request' ||
+       startsWith(github.ref, 'refs/tags/') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["android","both"]'), inputs.target)))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -169,12 +213,14 @@ jobs:
   warm-sdk-macos:
     name: Warm SDK cache (macOS — wasm + ios)
     runs-on: macos-15
+    needs: [validate-inputs]
     timeout-minutes: 60
     if: >-
-      contains(github.event.pull_request.labels.*.name, 'run-ios') ||
-      startsWith(github.ref, 'refs/tags/') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios","both"]'), inputs.target))
+      needs.validate-inputs.result != 'failure' &&
+      (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+       startsWith(github.ref, 'refs/tags/') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["ios","both"]'), inputs.target)))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -203,9 +249,10 @@ jobs:
   web:
     name: Web (glow-web submodule)
     runs-on: ubuntu-latest
-    needs: warm-sdk-linux
+    needs: [warm-sdk-linux, validate-inputs]
     if: >-
       !cancelled() &&
+      needs.validate-inputs.result != 'failure' &&
       (github.event_name == 'pull_request' ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -283,9 +330,10 @@ jobs:
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
-    needs: warm-sdk-linux
+    needs: [warm-sdk-linux, validate-inputs]
     if: >-
       !cancelled() &&
+      needs.validate-inputs.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
@@ -360,7 +408,7 @@ jobs:
   ios:
     name: iOS (xcodebuild, unsigned)
     runs-on: macos-15
-    needs: warm-sdk-macos
+    needs: [warm-sdk-macos, validate-inputs]
     # 60 min cold-run headroom: iOS cross-compile is slower than
     # Android (~15 min), plus xcodebuild itself (~10 min on a cold
     # Pods cache). Warm runs with SDK + Pods cache hit are ~5 min.
@@ -371,10 +419,11 @@ jobs:
     # burn. PRs opt in via the `run-ios` label for dev smoke-testing
     # when the dev wants CI to confirm the iOS build still compiles.
     if: >-
-      contains(github.event.pull_request.labels.*.name, 'run-ios') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios","both"]'), inputs.target) &&
-       inputs.distribution == 'none')
+      needs.validate-inputs.result != 'failure' &&
+      (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["ios","both"]'), inputs.target) &&
+        inputs.distribution == 'none'))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -454,7 +503,7 @@ jobs:
   ios-preview:
     name: iOS preview (Firebase App Distribution)
     runs-on: macos-15
-    needs: warm-sdk-macos
+    needs: [warm-sdk-macos, validate-inputs]
     # Same cold-run budget as the `ios` job plus FAD upload time.
     timeout-minutes: 60
     # Tag-triggered (preview-* / rc-*) or manually dispatched.
@@ -467,11 +516,12 @@ jobs:
     # profile is currently broken (see DEVELOPMENT.md follow-ups), so
     # only trigger the upload path when the dev explicitly asks for it.
     if: >-
-      startsWith(github.ref, 'refs/tags/preview-') ||
-      startsWith(github.ref, 'refs/tags/rc-') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios","both"]'), inputs.target) &&
-       inputs.distribution == 'firebase')
+      needs.validate-inputs.result != 'failure' &&
+      (startsWith(github.ref, 'refs/tags/preview-') ||
+       startsWith(github.ref, 'refs/tags/rc-') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["ios","both"]'), inputs.target) &&
+        inputs.distribution == 'firebase'))
     permissions:
       contents: read
     env:
@@ -561,17 +611,18 @@ jobs:
   android-preview:
     name: Android preview (Firebase App Distribution)
     runs-on: ubuntu-latest
-    needs: warm-sdk-linux
+    needs: [warm-sdk-linux, validate-inputs]
     timeout-minutes: 30
     # Parity with ios-preview: fires on preview-*/rc-* tag pushes OR
     # explicit dispatch with target=android|both AND distribution=firebase.
     # No main-push trigger.
     if: >-
-      startsWith(github.ref, 'refs/tags/preview-') ||
-      startsWith(github.ref, 'refs/tags/rc-') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android","both"]'), inputs.target) &&
-       inputs.distribution == 'firebase')
+      needs.validate-inputs.result != 'failure' &&
+      (startsWith(github.ref, 'refs/tags/preview-') ||
+       startsWith(github.ref, 'refs/tags/rc-') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["android","both"]'), inputs.target) &&
+        inputs.distribution == 'firebase'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -631,7 +682,7 @@ jobs:
   android-release:
     name: Android release (Play Internal)
     runs-on: ubuntu-latest
-    needs: warm-sdk-linux
+    needs: [warm-sdk-linux, validate-inputs]
     # Cold-run budget: web + WASM build + Android NDK + AAR
     # cross-compile + bundleRelease + Play upload. With cache hits
     # the Play upload itself is the slowest step (~2-3 min).
@@ -640,10 +691,11 @@ jobs:
     # with target=android|both AND distribution=store. Pair with
     # dry_run=true to verify the upload pipeline without publishing.
     if: >-
-      startsWith(github.ref, 'refs/tags/release-') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["android","both"]'), inputs.target) &&
-       inputs.distribution == 'store')
+      needs.validate-inputs.result != 'failure' &&
+      (startsWith(github.ref, 'refs/tags/release-') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["android","both"]'), inputs.target) &&
+        inputs.distribution == 'store'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -763,7 +815,7 @@ jobs:
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
-    needs: warm-sdk-macos
+    needs: [warm-sdk-macos, validate-inputs]
     # Cold-run budget: web + WASM + iOS xframework cross-compile +
     # Pods install + xcodebuild archive + IPA export + TestFlight
     # upload. ASC-side processing time is excluded
@@ -779,10 +831,11 @@ jobs:
     #   alongside android-release. Pair with dry_run=true to verify
     #   the full release pipeline without uploading.
     if: >-
-      startsWith(github.ref, 'refs/tags/release-') ||
-      (github.event_name == 'workflow_dispatch' &&
-       contains(fromJSON('["ios","both"]'), inputs.target) &&
-       inputs.distribution == 'store')
+      needs.validate-inputs.result != 'failure' &&
+      (startsWith(github.ref, 'refs/tags/release-') ||
+       (github.event_name == 'workflow_dispatch' &&
+        contains(fromJSON('["ios","both"]'), inputs.target) &&
+        inputs.distribution == 'store'))
     steps:
       - uses: actions/checkout@v4
         with:
@@ -829,24 +882,6 @@ jobs:
         # MARKETING_VERSION; running it first ensures version +
         # signing both land on the post-sync project state.
         run: npx cap sync ios
-
-      # Validate `version` input when running as a store-bound dispatch.
-      # compute-version.sh's actual override is applied via step-level
-      # `env:` below.
-      - name: Validate dispatch inputs
-        if: >-
-          github.event_name == 'workflow_dispatch' &&
-          inputs.distribution == 'store'
-        run: |
-          set -euo pipefail
-          if [[ -z "${{ inputs.version }}" ]]; then
-            echo "::error::distribution=store requires version input (e.g., 0.0.2)"
-            exit 1
-          fi
-          if ! [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::version '${{ inputs.version }}' must match MAJOR.MINOR.PATCH"
-            exit 1
-          fi
 
       - name: Compute version from tag
         # GitHub Actions silently ignores attempts to override default

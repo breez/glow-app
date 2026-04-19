@@ -669,6 +669,23 @@ the tag locally + remotely and re-push — the
 guarantees the new build's versionCode is unique even on the
 same semver, so Play won't reject the duplicate.
 
+Local script note: `scripts/ci/compute-version.sh` hard-fails
+if neither `GLOW_RELEASE_TAG` nor `GITHUB_REF_NAME` resolves to
+a well-formed `release-MAJOR.MINOR.PATCH` tag. The previous
+silent `0.0.0-dev` fallback was removed after it shipped a
+`0.0.0` IPA to TestFlight on 2026-04-18. CI sets these
+automatically; for local smoke tests, export the tag explicitly:
+
+```bash
+GLOW_RELEASE_TAG=release-0.1.0 ./scripts/ci/compute-version.sh
+```
+
+Dispatch-level input validation runs upfront in the
+`validate-inputs` job (< 30s on a Linux runner) before any
+macOS runner spins up, catching invalid combinations (e.g.
+`distribution=store` without `version`, malformed `version`)
+before the pipeline burns minutes on doomed builds.
+
 ## Branch protection (Phase 4B)
 
 Configure on `main` via Settings → Branches → Branch protection

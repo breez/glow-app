@@ -27,7 +27,12 @@
 #      shipped a CFBundleShortVersionString of 0.0.0 to TestFlight.
 #      Prefer this var for anything that wants to lie about the ref.
 #   2. $GITHUB_REF_NAME   — what GitHub exports natively on tag pushes.
-#   3. release-0.0.0-dev  — local dev fallback.
+#
+# Hard fail: if neither is set (or the value is not release-X.Y.Z), the
+# script exits 1. An earlier version fell back to `0.0.0-dev` silently —
+# on 2026-04-18 an ios-hotfix dispatch with a malformed tag slipped past
+# this fallback and shipped a 0.0.0 IPA to TestFlight. The fallback is
+# removed so every version-bearing build has to name a real release.
 #
 # Local invocation:
 #   GITHUB_REF_NAME=release-0.1.0 GITHUB_RUN_NUMBER=42 ./scripts/ci/compute-version.sh
@@ -35,18 +40,25 @@
 
 set -euo pipefail
 
-TAG="${GLOW_RELEASE_TAG:-${GITHUB_REF_NAME:-release-0.0.0-dev}}"
+TAG="${GLOW_RELEASE_TAG:-${GITHUB_REF_NAME:-}}"
 
-if [[ "$TAG" =~ ^release-([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-  MAJOR="${BASH_REMATCH[1]}"
-  MINOR="${BASH_REMATCH[2]}"
-  PATCH="${BASH_REMATCH[3]}"
-else
-  echo "Tag '$TAG' is not release-MAJOR.MINOR.PATCH — using placeholder 0.0.0-dev" >&2
-  MAJOR=0
-  MINOR=0
-  PATCH=0
+if [[ -z "$TAG" ]]; then
+  echo "::error::compute-version.sh: neither GLOW_RELEASE_TAG nor GITHUB_REF_NAME is set." >&2
+  echo "::error::Set one to release-MAJOR.MINOR.PATCH (e.g. release-0.1.0). The previous" >&2
+  echo "::error::silent 0.0.0-dev fallback has been removed (it shipped a 0.0.0 IPA to" >&2
+  echo "::error::TestFlight on 2026-04-18). For local smoke testing, export GLOW_RELEASE_TAG." >&2
+  exit 1
 fi
+
+if ! [[ "$TAG" =~ ^release-([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+  echo "::error::compute-version.sh: tag '$TAG' does not match release-MAJOR.MINOR.PATCH." >&2
+  echo "::error::Got: '$TAG'. Expected format: release-0.1.0 (no suffix, pre-release, or build metadata)." >&2
+  exit 1
+fi
+
+MAJOR="${BASH_REMATCH[1]}"
+MINOR="${BASH_REMATCH[2]}"
+PATCH="${BASH_REMATCH[3]}"
 
 RUN="${GITHUB_RUN_NUMBER:-0}"
 
