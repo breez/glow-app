@@ -561,10 +561,17 @@ jobs:
     # and running a duplicate unsigned archive would double the macOS
     # burn. PRs opt in via the `run-ios` label for dev smoke-testing
     # when the dev wants CI to confirm the iOS build still compiles.
+    # NB: `!cancelled()` is load-bearing. GH Actions implicitly prepends
+    # `success()` to every `if:` — with `warm-sdk-macos` in `needs:`,
+    # a preflight cache hit (→ warm-sdk-macos SKIPPED) flips the implicit
+    # success() to false and this job skips too, even with our explicit
+    # `!= 'failure'` checks. `!cancelled()` overrides that default and
+    # lets the explicit result checks decide. Learned the hard way via
+    # run 24618034776 — symmetric bug across all three iOS consumers.
     if: >-
-      needs.validate-inputs.result != 'failure' &&
+      !cancelled() &&
+      needs.validate-inputs.result == 'success' &&
       needs.warm-sdk-macos.result != 'failure' &&
-      needs.warm-sdk-macos.result != 'cancelled' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
@@ -666,10 +673,11 @@ jobs:
     # fired when distribution=store — the .dev ad-hoc provisioning
     # profile is currently broken (see DEVELOPMENT.md follow-ups), so
     # only trigger the upload path when the dev explicitly asks for it.
+    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
-      needs.validate-inputs.result != 'failure' &&
+      !cancelled() &&
+      needs.validate-inputs.result == 'success' &&
       needs.warm-sdk-macos.result != 'failure' &&
-      needs.warm-sdk-macos.result != 'cancelled' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -775,8 +783,11 @@ jobs:
     # Parity with ios-preview: fires on preview-*/rc-* tag pushes OR
     # explicit dispatch with target=android|both AND distribution=firebase.
     # No main-push trigger.
+    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
-      needs.validate-inputs.result != 'failure' &&
+      !cancelled() &&
+      needs.validate-inputs.result == 'success' &&
+      needs.warm-sdk-linux.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -855,8 +866,11 @@ jobs:
     # release-* tag push (full release pipeline) OR workflow_dispatch
     # with target=android|both AND distribution=store. Pair with
     # dry_run=true to verify the upload pipeline without publishing.
+    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
-      needs.validate-inputs.result != 'failure' &&
+      !cancelled() &&
+      needs.validate-inputs.result == 'success' &&
+      needs.warm-sdk-linux.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
@@ -1001,10 +1015,11 @@ jobs:
     # - workflow_dispatch with target=both distribution=store: fires
     #   alongside android-release. Pair with dry_run=true to verify
     #   the full release pipeline without uploading.
+    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
-      needs.validate-inputs.result != 'failure' &&
+      !cancelled() &&
+      needs.validate-inputs.result == 'success' &&
       needs.warm-sdk-macos.result != 'failure' &&
-      needs.warm-sdk-macos.result != 'cancelled' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
