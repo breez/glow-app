@@ -1182,7 +1182,20 @@ jobs:
     name: Publish GitHub Release
     needs: [android-release, ios-release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/release-')
+    # `!cancelled()` + explicit success checks on both upstreams.
+    # release-0.0.3's first attempt had both android-release and
+    # ios-release ending at 'success' but release-github still skipped
+    # because a transitive upstream (validate-inputs, which is
+    # dispatch-only) was 'skipped' — and the default skip-cascade
+    # propagates through transitively unless a condition explicitly
+    # overrides it. Explicitly require both upstreams to have
+    # succeeded so we don't publish a GH Release with missing
+    # artifacts.
+    if: >-
+      !cancelled() &&
+      needs.android-release.result == 'success' &&
+      needs.ios-release.result == 'success' &&
+      startsWith(github.ref, 'refs/tags/release-')
     permissions:
       # softprops/action-gh-release needs write to mutate releases.
       contents: write
