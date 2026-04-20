@@ -209,9 +209,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-inputs]
     timeout-minutes: 2
+    # `!cancelled()` bypasses the default-skip cascade from
+    # validate-inputs (dispatch-only) on tag pushes. See warm-sdk-linux
+    # for rationale.
     # Runs iff warm-sdk-macos might run. Skipped otherwise so PRs
     # without run-ios + dispatches for android-only stay Linux-only.
     if: >-
+      !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        startsWith(github.ref, 'refs/tags/') ||
@@ -298,7 +302,17 @@ jobs:
     runs-on: ubuntu-latest
     needs: [validate-inputs]
     timeout-minutes: 30
+    # `!cancelled()` bypasses the default-skip cascade from
+    # validate-inputs when it's skipped (tag pushes don't fire
+    # validate-inputs — it's gated on workflow_dispatch only).
+    # Without this prefix, `needs:` treats "upstream skipped" the
+    # same as "upstream failed" and this job inherits a skip,
+    # regardless of what the explicit `if:` expression below resolves
+    # to. release-0.0.3's first CI run failed exactly this way: every
+    # `needs: [validate-inputs]` warmer/preflight job skipped on the
+    # tag push, downstream consumer jobs then ran on empty caches.
     if: >-
+      !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       (github.event_name == 'pull_request' ||
        startsWith(github.ref, 'refs/tags/') ||
@@ -339,7 +353,10 @@ jobs:
     runs-on: macos-15
     needs: [validate-inputs, preflight]
     timeout-minutes: 60
+    # `!cancelled()` bypasses the default-skip cascade from
+    # validate-inputs (dispatch-only). See warm-sdk-linux for rationale.
     if: >-
+      !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       needs.preflight.outputs.ios-cache-hit != 'true' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
@@ -570,7 +587,7 @@ jobs:
     # run 24618034776 — symmetric bug across all three iOS consumers.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.result != 'failure' &&
       needs.warm-sdk-macos.result != 'failure' &&
       (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -676,7 +693,7 @@ jobs:
     # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.result != 'failure' &&
       needs.warm-sdk-macos.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
@@ -786,7 +803,7 @@ jobs:
     # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.result != 'failure' &&
       needs.warm-sdk-linux.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
@@ -869,7 +886,7 @@ jobs:
     # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.result != 'failure' &&
       needs.warm-sdk-linux.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
@@ -1018,7 +1035,7 @@ jobs:
     # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result == 'success' &&
+      needs.validate-inputs.result != 'failure' &&
       needs.warm-sdk-macos.result != 'failure' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
