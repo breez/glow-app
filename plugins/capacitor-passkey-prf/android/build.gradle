@@ -48,6 +48,15 @@ repositories {
     mavenLocal()
 }
 
+// Short-circuit Gradle's dynamic-version resolution cache (default 24h)
+// for the `breez_sdk_spark:bindings-android:0.1.0-local-+` wildcard so
+// `make sdk-android` publishing a new timestamped coord is picked up
+// on the NEXT build — not 24h later. Scoped to this single artifact;
+// everything else respects normal Gradle caching.
+configurations.all {
+    resolutionStrategy.cacheDynamicVersionsFor 0, 'seconds'
+}
+
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation project(':capacitor-android')
@@ -55,7 +64,15 @@ dependencies {
     // Breez Spark SDK — published to mavenLocal from spark-sdk build (pr/passkey-core branch).
     // Provides CredentialManagerPrfProvider, PasskeyPrfProvider interface, PasskeyPrfException.
     // Replace with published Maven dependency once SDK PR #781 merges.
-    implementation "breez_sdk_spark:bindings-android:0.1.0-local"
+    //
+    // The `-+` suffix is a dynamic-version wildcard: resolves to the
+    // newest mavenLocal version matching `0.1.0-local-<anything>`.
+    // `make sdk-android` publishes a timestamped coord on every
+    // invocation (see Makefile:SDK_MAVEN_VERSION) so this wildcard
+    // always picks up the freshest local build. Fixes the
+    // "forgot to rebuild SDK → stale AAR gets linked" footgun that
+    // previously surfaced as latent behavior on devices.
+    implementation "breez_sdk_spark:bindings-android:0.1.0-local-+"
 
     // AppCompat (required to resolve Capacitor's AppCompatActivity)
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

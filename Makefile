@@ -21,7 +21,27 @@ SDK_WASM_DIR = $(SPARK_SDK_DIR)/packages/wasm
 SDK_WASM_TGZ = $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-v0.1.0.tgz
 
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
-SDK_MAVEN_VERSION = 0.1.0-local
+
+# Include a timestamp so every `make sdk-android` invocation publishes
+# a UNIQUE coordinate to mavenLocal. Without this, gradle's
+# `publishToMavenLocal` task can skip re-publishing if the AAR output
+# file exists and the source mtime check doesn't detect a change
+# through the dep graph — observed when a Kotlin edit on
+# spark-sdk's `CredentialManagerPrfProvider.kt` silently kept yesterday's
+# AAR in mavenLocal, so the glow-app build pulled stale code from
+# the consumer side.
+#
+# Consumer side (plugins/capacitor-passkey-prf/android/build.gradle)
+# uses the `0.1.0-local-+` wildcard to resolve to whatever latest
+# timestamp exists in mavenLocal. `make sdk-android` publishes a new
+# timestamped coord → gradle's dependency resolution picks it up next
+# build.
+#
+# Devs who haven't changed spark-sdk source can SKIP `make sdk-android`;
+# gradle resolves the wildcard to the last-published timestamp, which
+# is already correct. This preserves the "cache hit is fast" property
+# while fixing the "cache miss looks like a cache hit" bug.
+SDK_MAVEN_VERSION = 0.1.0-local-$(shell date +%Y%m%d%H%M%S)
 
 # Capacitor 8 + AGP require JDK 21. Default to Android Studio's bundled
 # JBR (which is 21+) if JAVA_HOME isn't already set. Override with
