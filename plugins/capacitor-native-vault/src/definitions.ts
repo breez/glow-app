@@ -104,4 +104,35 @@ export interface NativeVaultPlugin {
 
   /** Wipe the persisted seed. Does NOT require biometric. Idempotent. */
   clearSeed(): Promise<void>;
+
+  // ---- Device-only tier (encrypted at rest, no biometric gate) ----
+  //
+  // Parallel slot used by non-passkey users who opted out of the
+  // biometric flow during onboarding. The seed is still encrypted at
+  // rest (iOS Keychain / Android Keystore AES-GCM) but reads are NOT
+  // gated by a biometric prompt. Strictly a separate storage slot
+  // from the biometric-bound family — the two never collide.
+
+  /**
+   * Returns true if a device-only seed blob is currently persisted.
+   * Does NOT prompt.
+   */
+  hasStoredSeedDeviceOnly(): Promise<HasStoredSeedResult>;
+
+  /**
+   * Persist a seed blob in the device-only tier. Does NOT prompt
+   * biometric — the storage is encrypted at rest but not biometric-gated.
+   */
+  storeSeedDeviceOnly(options: { seed: string }): Promise<void>;
+
+  /**
+   * Retrieve the device-only seed blob. Does NOT prompt biometric.
+   * Rejects with `NO_STORED_SEED` / `KEY_INVALIDATED` / `UNKNOWN`
+   * (a strict subset of the biometric-bound path — no USER_CANCELLED
+   * / BIOMETRIC_* codes since there's no prompt).
+   */
+  retrieveSeedDeviceOnly(): Promise<RetrieveSeedResult>;
+
+  /** Wipe the device-only seed. Idempotent. */
+  clearSeedDeviceOnly(): Promise<void>;
 }

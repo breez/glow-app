@@ -15,7 +15,22 @@ enum SeedVaultResult<T> {
 /// which uses iOS Keychain). Splitting the interface keeps the plugin class
 /// small and lets future providers (e.g. a Secure Enclave-backed one) slot
 /// in without touching the JS-facing layer.
+///
+/// Two storage tiers are exposed side-by-side:
+///
+///   - The biometric-bound tier (`hasStoredSeed` / `storeSeed` /
+///     `retrieveSeed` / `clearSeed`) — guarded by `SecAccessControl`
+///     with `.biometryCurrentSet`. Used by passkey-mode users.
+///
+///   - The device-only tier (the `...DeviceOnly` family) — encrypted
+///     at rest and pinned to `whenUnlockedThisDeviceOnly` but WITHOUT
+///     biometric binding. Used by non-passkey users who opted out of
+///     the passkey flow during onboarding. Still stronger than plain
+///     localStorage (no iCloud sync, no encrypted backups, locked at
+///     rest) but doesn't gate reads behind a biometric prompt.
 protocol SeedVaultProviding {
+    // Biometric-bound tier
+
     /// True if a seed blob is currently persisted. Does NOT prompt biometric.
     func hasStoredSeed() -> Bool
 
@@ -30,4 +45,21 @@ protocol SeedVaultProviding {
 
     /// Delete the persisted seed blob. Idempotent.
     func clearSeed() -> SeedVaultResult<Void>
+
+    // Device-only tier (encrypted at rest, no biometric gate)
+
+    /// True if a device-only seed blob is currently persisted. Does NOT prompt.
+    func hasStoredSeedDeviceOnly() -> Bool
+
+    /// Persist a seed blob in the device-only tier, replacing any existing
+    /// entry. Does NOT prompt biometric — the Keychain item's access control
+    /// uses only `whenUnlockedThisDeviceOnly`, not biometric binding.
+    func storeSeedDeviceOnly(_ seed: String) -> SeedVaultResult<Void>
+
+    /// Retrieve the device-only seed blob. Does NOT prompt biometric.
+    /// Returns `.notFound` when no entry exists.
+    func retrieveSeedDeviceOnly() -> SeedVaultResult<String>
+
+    /// Delete the device-only seed blob. Idempotent.
+    func clearSeedDeviceOnly() -> SeedVaultResult<Void>
 }

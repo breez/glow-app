@@ -28,6 +28,10 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "storeSeed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "retrieveSeed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearSeed", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "hasStoredSeedDeviceOnly", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "storeSeedDeviceOnly", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "retrieveSeedDeviceOnly", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "clearSeedDeviceOnly", returnType: CAPPluginReturnPromise),
     ]
 
     // Trait-style providers. Pinned to concrete types here; swap the
@@ -111,6 +115,67 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         switch vault.clearSeed() {
         case .ok, .notFound:
             // Idempotent — clearing a missing entry is success.
+            call.resolve()
+        case .error(let code, let message):
+            call.reject(message, code.rawValue)
+        }
+    }
+
+    // MARK: - Device-only tier (encrypted at rest, no biometric gate)
+
+    @objc func hasStoredSeedDeviceOnly(_ call: CAPPluginCall) {
+        call.resolve(["stored": vault.hasStoredSeedDeviceOnly()])
+    }
+
+    @objc func storeSeedDeviceOnly(_ call: CAPPluginCall) {
+        guard let seed = call.getString("seed") else {
+            call.reject("Missing required parameter: seed", NativeVaultErrorCode.unknown.rawValue)
+            return
+        }
+        // Keychain writes can block; stay off the main thread for parity
+        // with the biometric-bound path even though no prompt is shown.
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            let result = self.vault.storeSeedDeviceOnly(seed)
+            await MainActor.run {
+                switch result {
+                case .ok:
+                    call.resolve()
+                case .notFound:
+                    call.reject(
+                        "Seed vault returned notFound on storeSeedDeviceOnly",
+                        NativeVaultErrorCode.unknown.rawValue
+                    )
+                case .error(let code, let message):
+                    call.reject(message, code.rawValue)
+                }
+            }
+        }
+    }
+
+    @objc func retrieveSeedDeviceOnly(_ call: CAPPluginCall) {
+        Task.detached { [weak self] in
+            guard let self = self else { return }
+            let result = self.vault.retrieveSeedDeviceOnly()
+            await MainActor.run {
+                switch result {
+                case .ok(let seed):
+                    call.resolve(["seed": seed])
+                case .notFound:
+                    call.reject(
+                        "No seed is currently persisted in device-only secure storage.",
+                        NativeVaultErrorCode.noStoredSeed.rawValue
+                    )
+                case .error(let code, let message):
+                    call.reject(message, code.rawValue)
+                }
+            }
+        }
+    }
+
+    @objc func clearSeedDeviceOnly(_ call: CAPPluginCall) {
+        switch vault.clearSeedDeviceOnly() {
+        case .ok, .notFound:
             call.resolve()
         case .error(let code, let message):
             call.reject(message, code.rawValue)

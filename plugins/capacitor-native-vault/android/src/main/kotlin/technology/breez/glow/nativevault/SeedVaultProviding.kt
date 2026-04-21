@@ -34,6 +34,8 @@ sealed class SeedVaultResult<out T> {
  * intentional — each platform matches its OS-native pattern.
  */
 interface SeedVaultProviding {
+    // ---- Biometric-bound tier ----
+
     /** True if a seed blob is currently persisted. Does NOT prompt biometric. */
     fun hasStoredSeed(): Boolean
 
@@ -84,4 +86,31 @@ interface SeedVaultProviding {
 
     /** Delete the persisted seed blob and the underlying Keystore key. Idempotent. */
     fun clearSeed(): SeedVaultResult<Unit>
+
+    // ---- Device-only tier (encrypted at rest, no biometric gate) ----
+    //
+    // Used by non-passkey users who opted out of the biometric flow during
+    // onboarding. The AES-GCM key for this tier is NOT marked
+    // `setUserAuthenticationRequired(true)`, so `Cipher.init` +
+    // `cipher.doFinal` run in a single step without a
+    // `BiometricPrompt.CryptoObject` dance. No prepare/finish split
+    // because there's no biometric mid-flow.
+
+    /** True if a device-only seed blob is currently persisted. Does NOT prompt. */
+    fun hasStoredSeedDeviceOnly(): Boolean
+
+    /**
+     * Persist a seed blob in the device-only tier. Generates the underlying
+     * Keystore key on first use without any biometric-auth flags.
+     */
+    fun storeSeedDeviceOnly(seed: String): SeedVaultResult<Unit>
+
+    /**
+     * Retrieve the device-only seed blob. Does NOT prompt biometric.
+     * Returns `NotFound` if nothing is stored.
+     */
+    fun retrieveSeedDeviceOnly(): SeedVaultResult<String>
+
+    /** Delete the device-only seed blob and its Keystore key. Idempotent. */
+    fun clearSeedDeviceOnly(): SeedVaultResult<Unit>
 }

@@ -183,6 +183,89 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         }
     }
 
+    // MARK: - Device-only tier (encrypted at rest, no biometric gate)
+
+    override fun hasStoredSeedDeviceOnly(): Boolean {
+        return prefs.contains(PREFS_KEY_CIPHERTEXT_DEVICE_ONLY)
+    }
+
+    override fun storeSeedDeviceOnly(seed: String): SeedVaultResult<Unit> {
+        return try {
+            val key = getOrCreateDeviceOnlyKey()
+            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+            cipher.init(Cipher.ENCRYPT_MODE, key)
+            val iv = cipher.iv
+            val ciphertext = cipher.doFinal(seed.toByteArray(Charsets.UTF_8))
+
+            prefs.edit()
+                .putString(PREFS_KEY_IV_DEVICE_ONLY, Base64.encodeToString(iv, Base64.NO_WRAP))
+                .putString(PREFS_KEY_CIPHERTEXT_DEVICE_ONLY, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
+                .apply()
+
+            SeedVaultResult.Ok(Unit)
+        } catch (e: GeneralSecurityException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.UNKNOWN,
+                "Device-only encrypt failure: ${e.message ?: "unknown"}",
+            )
+        } catch (e: Exception) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.UNKNOWN,
+                "storeSeedDeviceOnly failed: ${e.message ?: "unknown"}",
+            )
+        }
+    }
+
+    override fun retrieveSeedDeviceOnly(): SeedVaultResult<String> {
+        val ciphertextBase64 = prefs.getString(PREFS_KEY_CIPHERTEXT_DEVICE_ONLY, null)
+            ?: return SeedVaultResult.NotFound
+        val ivBase64 = prefs.getString(PREFS_KEY_IV_DEVICE_ONLY, null)
+            ?: return SeedVaultResult.Error(
+                NativeVaultErrorCode.KEY_INVALIDATED,
+                "Device-only ciphertext exists but IV is missing",
+            )
+
+        return try {
+            val key = getDeviceOnlyKey() ?: return SeedVaultResult.Error(
+                NativeVaultErrorCode.KEY_INVALIDATED,
+                "Device-only ciphertext exists but Keystore key is missing",
+            )
+            val iv = Base64.decode(ivBase64, Base64.NO_WRAP)
+            val ciphertext = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
+
+            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
+            val plaintext = cipher.doFinal(ciphertext)
+            SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+        } catch (e: GeneralSecurityException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.UNKNOWN,
+                "Device-only decrypt failure: ${e.message ?: "unknown"}",
+            )
+        } catch (e: Exception) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.UNKNOWN,
+                "retrieveSeedDeviceOnly failed: ${e.message ?: "unknown"}",
+            )
+        }
+    }
+
+    override fun clearSeedDeviceOnly(): SeedVaultResult<Unit> {
+        return try {
+            prefs.edit()
+                .remove(PREFS_KEY_IV_DEVICE_ONLY)
+                .remove(PREFS_KEY_CIPHERTEXT_DEVICE_ONLY)
+                .apply()
+            try { deleteDeviceOnlyKey() } catch (_: Exception) { /* best-effort */ }
+            SeedVaultResult.Ok(Unit)
+        } catch (e: Exception) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.UNKNOWN,
+                "clearSeedDeviceOnly failed: ${e.message ?: "unknown"}",
+            )
+        }
+    }
+
     // MARK: - Keystore helpers
 
     private fun keyStore(): KeyStore {
@@ -276,9 +359,64 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             .apply()
     }
 
+    // MARK: - Device-only key management
+
+    /** Returns the existing device-only AES key, or null if it doesn't exist. */
+    private fun getDeviceOnlyKey(): SecretKey? {
+        val ks = keyStore()
+        val entry = ks.getEntry(KEY_ALIAS_DEVICE_ONLY, null) as? KeyStore.SecretKeyEntry ?: return null
+        return entry.secretKey
+    }
+
+    /** Returns the existing device-only key, or generates a fresh one if missing. */
+    private fun getOrCreateDeviceOnlyKey(): SecretKey {
+        getDeviceOnlyKey()?.let { return it }
+        return generateDeviceOnlyKey()
+    }
+
+    /**
+     * Generate the device-only AES-GCM key. Mirrors `generateKey()` but
+     * WITHOUT the biometric-auth flags:
+     *
+     *   - No `setUserAuthenticationRequired(true)` — `Cipher.doFinal`
+     *     runs without a `BiometricPrompt.CryptoObject`.
+     *   - No `setInvalidatedByBiometricEnrollment(true)` — a new
+     *     biometric enrollment does NOT wipe this key.
+     *   - No `setUserAuthenticationParameters(...)` — nothing to
+     *     authenticate against.
+     *
+     * The key is still hardware-backed AES-256-GCM on devices that
+     * support it, so the ciphertext at rest is still protected by
+     * Keystore.
+     */
+    private fun generateDeviceOnlyKey(): SecretKey {
+        val keyGenerator = KeyGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_AES,
+            ANDROID_KEY_STORE,
+        )
+        val builder = KeyGenParameterSpec.Builder(
+            KEY_ALIAS_DEVICE_ONLY,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(AES_KEY_SIZE_BITS)
+
+        keyGenerator.init(builder.build())
+        return keyGenerator.generateKey()
+    }
+
+    private fun deleteDeviceOnlyKey() {
+        val ks = keyStore()
+        if (ks.containsAlias(KEY_ALIAS_DEVICE_ONLY)) {
+            ks.deleteEntry(KEY_ALIAS_DEVICE_ONLY)
+        }
+    }
+
     companion object {
         private const val ANDROID_KEY_STORE = "AndroidKeyStore"
         private const val KEY_ALIAS = "technology.breez.glow.native-vault.seed-key"
+        private const val KEY_ALIAS_DEVICE_ONLY = "technology.breez.glow.native-vault.seed-key.device-only"
         private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val AES_KEY_SIZE_BITS = 256
         private const val GCM_TAG_BITS = 128
@@ -286,5 +424,7 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         private const val SHARED_PREFERENCES_NAME = "technology.breez.glow.NativeVault"
         private const val PREFS_KEY_IV = "wallet_seed_iv"
         private const val PREFS_KEY_CIPHERTEXT = "wallet_seed_ciphertext"
+        private const val PREFS_KEY_IV_DEVICE_ONLY = "wallet_seed_iv_device_only"
+        private const val PREFS_KEY_CIPHERTEXT_DEVICE_ONLY = "wallet_seed_ciphertext_device_only"
     }
 }
