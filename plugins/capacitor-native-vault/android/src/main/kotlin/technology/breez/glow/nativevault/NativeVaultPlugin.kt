@@ -173,6 +173,54 @@ class NativeVaultPlugin : Plugin() {
         }
     }
 
+    // MARK: - Device-only tier (encrypted at rest, no biometric gate)
+
+    @PluginMethod
+    fun hasStoredSeedDeviceOnly(call: PluginCall) {
+        val result = JSObject().apply { put("stored", vault.hasStoredSeedDeviceOnly()) }
+        call.resolve(result)
+    }
+
+    @PluginMethod
+    fun storeSeedDeviceOnly(call: PluginCall) {
+        val seed = call.getString("seed")
+        if (seed == null) {
+            call.reject("Missing required parameter: seed", NativeVaultErrorCode.UNKNOWN.code)
+            return
+        }
+        when (val result = vault.storeSeedDeviceOnly(seed)) {
+            is SeedVaultResult.Ok -> call.resolve()
+            is SeedVaultResult.NotFound -> call.reject(
+                "Seed vault returned NotFound on storeSeedDeviceOnly",
+                NativeVaultErrorCode.UNKNOWN.code,
+            )
+            is SeedVaultResult.Error -> call.reject(result.message, result.code.code)
+        }
+    }
+
+    @PluginMethod
+    fun retrieveSeedDeviceOnly(call: PluginCall) {
+        when (val result = vault.retrieveSeedDeviceOnly()) {
+            is SeedVaultResult.Ok -> {
+                val ret = JSObject().apply { put("seed", result.value) }
+                call.resolve(ret)
+            }
+            is SeedVaultResult.NotFound -> call.reject(
+                "No seed is currently persisted in device-only secure storage.",
+                NativeVaultErrorCode.NO_STORED_SEED.code,
+            )
+            is SeedVaultResult.Error -> call.reject(result.message, result.code.code)
+        }
+    }
+
+    @PluginMethod
+    fun clearSeedDeviceOnly(call: PluginCall) {
+        when (val result = vault.clearSeedDeviceOnly()) {
+            is SeedVaultResult.Ok, SeedVaultResult.NotFound -> call.resolve()
+            is SeedVaultResult.Error -> call.reject(result.message, result.code.code)
+        }
+    }
+
     // MARK: - Internal
 
     /**

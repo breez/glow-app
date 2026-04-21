@@ -36,6 +36,12 @@ final class KeychainSeedVault: SeedVaultProviding {
     private let service = "technology.breez.glow.native-vault"
     private let account = "wallet-seed"
 
+    /// Service identifier for the device-only tier (no biometric binding).
+    /// Separate service keeps the two Keychain slots independent — clearing
+    /// one never affects the other, and a non-passkey user never inherits
+    /// a stale biometric-bound item.
+    private let deviceOnlyService = "technology.breez.glow.native-vault.device-only"
+
     func hasStoredSeed() -> Bool {
         var query = baseQuery()
         query[kSecReturnData as String] = false
@@ -166,6 +172,89 @@ final class KeychainSeedVault: SeedVaultProviding {
         return .error(mapKeychainStatus(status), "Keychain SecItemDelete failed (status \(status))")
     }
 
+    // MARK: - Device-only tier (no biometric binding)
+
+    func hasStoredSeedDeviceOnly() -> Bool {
+        var query = deviceOnlyBaseQuery()
+        query[kSecReturnData as String] = false
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        // No `kSecUseAuthenticationUI` needed — device-only items are not
+        // biometric-gated, so a plain `SecItemCopyMatching` call is a
+        // zero-prompt presence check.
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+
+    func storeSeedDeviceOnly(_ seed: String) -> SeedVaultResult<Void> {
+        guard let data = seed.data(using: .utf8) else {
+            return .error(.unknown, "Failed to encode seed payload as UTF-8")
+        }
+
+        // Overwrite-on-store semantics: delete any existing entry first,
+        // then add. Consistent with the biometric-bound path and avoids
+        // `SecItemUpdate` subtleties around accessibility changes.
+        let deleteStatus = SecItemDelete(deviceOnlyBaseQuery() as CFDictionary)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            return .error(
+                mapKeychainStatus(deleteStatus),
+                "Keychain SecItemDelete (pre-write, device-only) failed (status \(deleteStatus))"
+            )
+        }
+
+        var addQuery = deviceOnlyBaseQuery()
+        addQuery[kSecValueData as String] = data
+        // Plain accessibility class — no SecAccessControl, no biometric gate.
+        // Device-only + unlocked-required gives encryption at rest, no
+        // iCloud sync, no encrypted-backup inclusion.
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        if addStatus == errSecSuccess {
+            return .ok(())
+        }
+        return .error(
+            mapKeychainStatus(addStatus),
+            "Keychain SecItemAdd (device-only) failed (status \(addStatus))"
+        )
+    }
+
+    func retrieveSeedDeviceOnly() -> SeedVaultResult<String> {
+        var query = deviceOnlyBaseQuery()
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+
+        if status == errSecItemNotFound {
+            return .notFound
+        }
+        if status != errSecSuccess {
+            return .error(
+                mapKeychainStatus(status),
+                "Keychain SecItemCopyMatching (device-only) failed (status \(status))"
+            )
+        }
+        guard let data = item as? Data else {
+            return .error(.keyInvalidated, "Keychain returned an unexpected payload type")
+        }
+        guard let seed = String(data: data, encoding: .utf8) else {
+            return .error(.keyInvalidated, "Stored seed payload is not valid UTF-8")
+        }
+        return .ok(seed)
+    }
+
+    func clearSeedDeviceOnly() -> SeedVaultResult<Void> {
+        let status = SecItemDelete(deviceOnlyBaseQuery() as CFDictionary)
+        if status == errSecSuccess || status == errSecItemNotFound {
+            return .ok(())
+        }
+        return .error(
+            mapKeychainStatus(status),
+            "Keychain SecItemDelete (device-only) failed (status \(status))"
+        )
+    }
+
     /// Build the F3 access control: the item is readable only after a
     /// successful biometric auth against the CURRENT enrollment, and
     /// unreadable while the device is locked. `whenUnlockedThisDeviceOnly`
@@ -186,6 +275,16 @@ final class KeychainSeedVault: SeedVaultProviding {
         return [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+    }
+
+    /// Common attributes for the device-only tier. Shares the account
+    /// name but uses a separate service so the two slots never collide.
+    private func deviceOnlyBaseQuery() -> [String: Any] {
+        return [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: deviceOnlyService,
             kSecAttrAccount as String: account,
         ]
     }
