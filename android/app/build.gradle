@@ -18,13 +18,16 @@ android {
         applicationId "technology.breez.glow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // versionCode + versionName are env-driven on tag-triggered
-        // CI runs (see scripts/ci/compute-version.sh — derives both
-        // from the release-X.Y.Z tag + GITHUB_RUN_NUMBER). Local
-        // builds without the envs fall back to a 0.0.0-dev marker
-        // so it's obvious which builds came from the tag pipeline.
+        // versionCode + versionName are env-driven on CI runs (see
+        // scripts/ci/compute-version.sh — derives both from the tag
+        // context + GITHUB_RUN_NUMBER, using package.json's version
+        // field as the app-side basis). Local builds without the envs
+        // read package.json directly for the version name + a `-dev.local`
+        // suffix, so every locally-installed APK reports the real basis
+        // version with a clear "not from CI" marker.
         versionCode Integer.parseInt(System.getenv('VERSION_CODE') ?: '1')
-        versionName System.getenv('VERSION_NAME') ?: '0.0.0-dev'
+        versionName System.getenv('VERSION_NAME') ?:
+            ("${new groovy.json.JsonSlurper().parseText(rootProject.file('../package.json').text).version}-dev.local" as String)
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

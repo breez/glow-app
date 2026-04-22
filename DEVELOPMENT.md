@@ -218,7 +218,7 @@ Current model:
 | PR open/push | `web` only — tsc + lint + vitest + `cap doctor` + glow-web-submodule-pushed-to-origin check | ~3–5 min Linux |
 | Push to `main` | **nothing** — admin-merged PRs already passed their gate | 0 |
 | `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB → Play Internal) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
-| `preview-*` / `rc-*` tag push | Firebase App Distribution: `ios-preview` + `android-preview` | ~250 min |
+| `preview-*` / `rc-*` tag push | Firebase App Distribution: warm-sdk-{linux,macos} + `web` + `ios-preview` + `android-preview` | ~250 min |
 | `workflow_dispatch` | Dev picks `target` × `distribution` × `version` × `dry_run` inputs (see table below) | varies |
 
 **Trade-off**: a broken Android or iOS build can merge to `main` without
@@ -253,6 +253,12 @@ or `gh workflow run`:
 | Android Play Internal (was `android-internal`) | `android` | `store` | `0.0.2` | — |
 | Full release dry-run (was `full-release`) | `both` | `store` | `0.0.3` | `true` |
 | Full release (pre-tag verification) | `both` | `store` | `0.0.3` | `false` |
+
+The `web` static-analysis job (tsc + lint + vitest) fires alongside
+every distribution-bound dispatch (`distribution=firebase` or
+`distribution=store`, any target). `distribution=none` compile-check
+dispatches skip it — their only job is to confirm the platform build
+still compiles.
 
 Example invocations:
 
