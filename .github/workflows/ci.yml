@@ -62,18 +62,12 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least-privilege default. The ios-preview job (Step 6) scopes up to
-# what Firebase App Distribution needs.
+# Least-privilege default. Jobs that need more (release-github writes
+# a GitHub Release) scope up at the job level.
 permissions:
   contents: read
 
 jobs:
-  # NOTE: the former `changes` path-filter job was removed when CI was
-  # restructured to build-on-demand. PRs now always run the web static-
-  # analysis gate (tsc + lint + vitest + cap doctor + submodule check),
-  # and the expensive build jobs (android/ios) never fire on PR events
-  # — they're moved to workflow_dispatch (see the `target` / `distribution` inputs).
-
   # Gate on workflow_dispatch input combinations. Catches invalid combos
   # (distribution=store with no version, malformed version, etc.) in
   # <30s on a Linux runner before any macOS runner spins up. Wired into
@@ -296,7 +290,7 @@ jobs:
       - name: Unit tests
         run: cd glow-web && npm run test
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: web-test-results
@@ -332,7 +326,7 @@ jobs:
           java-version: '21'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           # Falls back to an unencrypted shared cache when the secret is unset.
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
@@ -359,13 +353,13 @@ jobs:
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: glow-${{ github.sha }}-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: android-build-logs
@@ -443,7 +437,7 @@ jobs:
             build | tee xcodebuild.log
 
       - name: Upload xcodebuild log on failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: ios-build-log
@@ -549,18 +543,12 @@ jobs:
           bundle exec fastlane upload_firebase
 
       - name: Upload archive on failure
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: ios-preview-archive
           path: build/App.xcarchive
           retention-days: 7
-
-  # ---------------------------------------------------------------
-  # Phase 4C jobs below. preview-* / rc-* tags add Android FAD;
-  # release-* tags fan out to android-release + ios-release, then
-  # release-github finalizes with a GitHub Release.
-  # ---------------------------------------------------------------
 
   android-preview:
     name: Android preview (Firebase App Distribution)
@@ -592,7 +580,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
@@ -641,7 +629,7 @@ jobs:
           export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
           bundle exec fastlane upload_firebase
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: android-preview-build-logs
@@ -681,7 +669,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
@@ -752,13 +740,13 @@ jobs:
           cd android && ./gradlew :app:bundleRelease :app:publishReleaseBundle --no-daemon
 
       - name: Upload AAB artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: glow-${{ github.ref_name }}-aab
           path: android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: android-release-build-logs
@@ -877,13 +865,13 @@ jobs:
         run: bundle exec fastlane upload
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: glow-${{ github.ref_name }}-ipa
           path: build/App.ipa
           retention-days: 30
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: failure()
         with:
           name: ios-release-archive
