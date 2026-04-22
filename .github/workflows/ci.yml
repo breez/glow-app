@@ -1,47 +1,15 @@
 name: CI
 
-# ---------------------------------------------------------------------------
-# TRIGGER MODEL — build-on-demand, static-analysis-by-default
-# ---------------------------------------------------------------------------
-# Pre-overhaul model: every push + PR triggered the full build matrix
-# (web + android + iOS), which cost ~300-450 billed min per event and
-# burned ~2.9k min over a single 48h release cycle. Most of that work
-# was redundant — devs already tested locally via `make deploy-ios` /
-# `make deploy-android` before pushing, and CI mostly re-ran what was
-# already green.
-#
-# Current model:
-#   - PR open/push        → `web` (static analysis only, ~3 min Linux).
-#                           tsc + lint + vitest + cap doctor + SDK pin
-#                           + submodule push check. Catches the regressions
-#                           static analysis actually catches; trusts the
-#                           dev to have compiled the app locally.
-#   - Push to `main`      → NO auto-CI. Artifacts are produced only on
-#                           explicit intent (tag push or dispatch).
-#   - Tag `release-*`     → Full release pipeline (Android AAB → Play
-#                           Internal + iOS IPA → TestFlight + GitHub
-#                           Release publish). The one place where
-#                           "build everything once more to be sure"
-#                           earns its macOS minutes.
-#   - Tag `preview-*` /
-#     `rc-*`              → Firebase App Distribution uploads (iOS +
-#                           Android preview jobs). Explicit intent.
-#   - workflow_dispatch   → Pick `target` (ios|android|both) ×
-#                           `distribution` (none|firebase|store) inputs
-#                           below. `version` is required when
-#                           distribution=store. `dry_run` skips the
-#                           upload step for store-bound builds.
-#
-# Trade-off: a broken Android build could merge to main without CI
-# noticing. Release tag push still catches it loudly before artifacts
-# reach users. Between releases, devs own catching build regressions
-# locally before pushing. If this proves too loose in practice, a
-# weekly `schedule: cron` health-check of
-# `target=both distribution=store version=X.Y.Z dry_run=true` would
-# catch silent drift within 7 days at ~450 billed min/week.
-#
-# See DEVELOPMENT.md "CI dispatch reference" for the preset table.
-# ---------------------------------------------------------------------------
+# Trigger model (build-on-demand):
+#   - PR open/push → `web` only (tsc + lint + vitest, ~3 min Linux).
+#   - main push    → no CI. Artifacts only on explicit intent.
+#   - release-* tag → full release pipeline (AAB → Play Internal + IPA →
+#                     TestFlight + GitHub Release).
+#   - preview-* / rc-* tag → Firebase App Distribution uploads.
+#   - workflow_dispatch → target × distribution × (version for store).
+# Trade-off: a broken Android/iOS build could merge to main undetected —
+# the release-tag path catches it before artifacts reach users. See
+# DEVELOPMENT.md "CI dispatch reference" for the preset table.
 on:
   pull_request:
     paths-ignore:
@@ -56,11 +24,6 @@ on:
     tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
     inputs:
-      # target × distribution is the orthogonal replacement for the
-      # older single `job` enum. Every combination maps to exactly
-      # one set of platform jobs; `version` gates store uploads;
-      # `dry_run` flips store builds into "produce the artifact,
-      # skip the upload" for pre-release verification.
       target:
         description: 'Platform to build'
         type: choice
@@ -76,24 +39,12 @@ on:
         required: true
         default: 'none'
         options:
-          # No upload. Unsigned debug/compile-only build for sanity-checking.
-          #   target=ios     → xcodebuild unsigned (was `ios-unsigned`).
-          #   target=android → assembleDebug + APK artifact (was `android-debug`).
-          #   target=both    → fires both unsigned jobs in parallel.
+          # none     — unsigned compile-only (iOS xcodebuild / Android assembleDebug)
+          # firebase — Firebase App Distribution (.dev bundle IDs)
+          # store    — TestFlight + Play Internal. Requires `version`. Pair with
+          #            dry_run=true to verify the pipeline without uploading.
           - none
-          # Firebase App Distribution — ad-hoc signed IPA (iOS) or
-          # debug APK (Android) against the `.dev` bundle IDs.
-          #   target=ios     → was `ios-firebase`.
-          #   target=android → was `android-firebase`.
-          #   target=both    → fires both preview uploads.
           - firebase
-          # Store-bound release. TestFlight (iOS app-store signed) +
-          # Play Internal (Android AAB). Requires `version`.
-          #   target=ios     → was `ios-testflight`.
-          #   target=android → was `android-internal`.
-          #   target=both    → was `full-release`. Use with dry_run=true
-          #                    to verify the full release pipeline without
-          #                    uploading.
           - store
       version:
         description: 'Marketing version MAJOR.MINOR.PATCH — required when distribution=store (e.g. 0.0.2)'
@@ -139,17 +90,6 @@ jobs:
     timeout-minutes: 2
     if: github.event_name == 'workflow_dispatch'
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      # Needed only so the `report-billable-cost` local composite action
-      # below can be resolved from the runner's workspace. Sparse so we
-      # don't pull the submodule tree we don't need for input validation.
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions/report-billable-cost
-          sparse-checkout-cone-mode: false
-
       - name: Enforce input combinations
         env:
           TARGET:       ${{ inputs.target }}
@@ -176,88 +116,44 @@ jobs:
 
           echo "::notice::validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
-  # Linux-side probe of the macOS SDK artifact cache. Runs on a 1×
-  # ubuntu runner before any macOS VM spins up and sets an output
-  # that `warm-sdk-macos` reads via `needs.preflight.outputs.ios-cache-hit`.
-  #
-  # Why Linux can probe a macOS cache: GitHub's cache service is
-  # OS-agnostic at the lookup level — the cache key (sdk-artifacts-
-  # macOS-<SHA>) is just a string. Only the cached PAYLOAD is
-  # macOS-specific (xcframework paths). `lookup-only: true` checks
-  # existence without downloading anything.
-  #
-  # Savings: ~2–3 macOS min × 10× billing per iOS run on a warm-cache
-  # path. Before this job, warm-sdk-macos would spin up a macos-15 VM
-  # just to verify the cache existed (the composite action's consumer-
-  # mode restore takes ~1-2 min on macOS start). Now that's a <10s
-  # lookup on a Linux runner.
-  #
-  # Fail-open: `continue-on-error` on the probe step + an explicit
-  # output-setting step mean any failure yields `ios-cache-hit=''`,
-  # which `warm-sdk-macos` reads as "not a confirmed hit" → warmer
-  # runs. We never regress correctness, only skip when we're sure.
-  #
-  # 7-day cache eviction: GitHub evicts caches after 7 days of no
-  # access. A cold-cache event is therefore surfaced EARLIER (at the
-  # preflight's `::notice::` output) than the old model, where the
-  # miss surfaced mid-warmer. Legibility win even on cold paths.
+  # Linux-side probe of the macOS SDK artifact cache. Saves ~2–3 macOS min ×
+  # 10× billing on warm-cache iOS runs by confirming cache existence before
+  # any macos-15 VM spins up. GitHub's cache service is OS-agnostic at the
+  # lookup layer — the key is just a string, `lookup-only: true` does no
+  # download. Fail-open: any probe error yields `ios-cache-hit=''` which
+  # warm-sdk-macos reads as "run anyway".
   preflight:
     name: Preflight (probe macOS SDK cache from Linux)
     runs-on: ubuntu-latest
-    needs: [validate-inputs]
     timeout-minutes: 2
-    # `!cancelled()` bypasses the default-skip cascade from
-    # validate-inputs (dispatch-only) on tag pushes. See warm-sdk-linux
-    # for rationale.
-    # Runs iff warm-sdk-macos might run. Skipped otherwise so PRs
-    # without run-ios + dispatches for android-only stay Linux-only.
+    # Independent of validate-inputs — the probe is harmless on a
+    # failed-validation dispatch (warm-sdk-macos is the fail-fast point).
     if: >-
-      !cancelled() &&
-      needs.validate-inputs.result != 'failure' &&
-      (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
-       startsWith(github.ref, 'refs/tags/') ||
-       (github.event_name == 'workflow_dispatch' &&
-        contains(fromJSON('["ios","both"]'), inputs.target)))
+      contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' &&
+       contains(fromJSON('["ios","both"]'), inputs.target))
     outputs:
       ios-cache-hit: ${{ steps.set-output.outputs.ios-cache-hit }}
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      # Submodules omitted — we only need `.spark-sdk-ref` from the
-      # top-level repo to derive the cache key, not the glow-web tree
-      # or the Pods it'd pull in.
       - uses: actions/checkout@v6
 
       - name: Read pinned SDK SHA
         id: sdk-sha
-        # Must match the composite action's `grep -vE '^\s*(#|$)'`
-        # logic verbatim — any divergence yields a miss-shaped hash
-        # and defeats the whole preflight.
+        # Must match the composite action's grep logic verbatim —
+        # any divergence shapes a miss-shaped hash and defeats this probe.
         run: |
           echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
       - name: Probe macOS SDK artifact cache
         id: probe
-        # `continue-on-error: true` is the fail-open mechanism: a cache
-        # service blip, auth glitch, or typo'd key yields an error here
-        # but doesn't fail the job. The next step sees an empty
-        # `cache-hit` and writes `ios-cache-hit=''` downstream, which
-        # warm-sdk-macos reads as "not a confirmed hit" → runs anyway.
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          # Must match warm-sdk-macos's key exactly. The composite
-          # action constructs `sdk-artifacts-${{ runner.os }}-<SHA>`
-          # where runner.os evaluates to "macOS" on the macos-15 VM;
-          # we hardcode "macOS" here since we're probing from Linux.
+          # Key must match warm-sdk-macos exactly. runner.os=macOS there;
+          # hardcoded here since we're probing from Linux.
           key: sdk-artifacts-macOS-${{ steps.sdk-sha.outputs.sha }}
-          # Paths must be specified for cache/restore to run but are
-          # not used under `lookup-only: true` (no download happens).
-          # Mirror the composite action's paths for clarity.
+          # Paths are required syntactically but unused under lookup-only.
           path: |
             .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
             .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
@@ -275,53 +171,29 @@ jobs:
             echo "::notice::macOS SDK cache MISS or error (hit='${hit:-}') for sha=${{ steps.sdk-sha.outputs.sha }} — warm-sdk-macos will run"
           fi
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
-  # Dedicated SDK "warmer" jobs — build the spark-sdk from source
-  # once per pinned SHA per OS, cache the output artifacts. Every
-  # downstream job `needs:`-waits for the matching warmer and runs
-  # setup-glow-app in consumer mode (cache-restore only, no
-  # toolchain install, no SDK build). On warm cache, the warmer is
-  # ~1-2 min (restore only) and downstream jobs skip setup-glow-app
-  # heavy lifting entirely. On cold cache (new SDK SHA), the SDK
-  # build cost is paid ONCE instead of per-job.
-  #
-  # Both warmers use CACHE_ON_FAILURE and save-on-exit semantics via
-  # actions/cache@v5's default behavior, so even if a downstream job
-  # later fails, the cache from the warmer remains for subsequent
-  # runs.
-  # Fires whenever any Linux-consuming downstream job will run. On a PR
-  # that's the web static-analysis job (needs the WASM tgz to `npm
-  # install` glow-web's SDK dep); on a release-* tag it's android +
-  # android-release; on a dispatch it's any run that includes android
-  # (target=android|both) — also covers the target=both distribution=store
-  # case, since the `web` gate runs there too.
+  # SDK "warmer" jobs build spark-sdk from source once per pinned SHA per OS
+  # and cache the output artifacts. Every downstream job `needs:`-waits for
+  # the matching warmer and runs setup-glow-app in consumer mode (restore
+  # only). Warm path: warmer ~1–2 min, consumers skip the SDK build.
+  # Cold path: SDK build cost is paid ONCE instead of per-job.
   warm-sdk-linux:
     name: Warm SDK cache (Linux — wasm + android)
     runs-on: ubuntu-latest
     needs: [validate-inputs]
     timeout-minutes: 30
-    # `!cancelled()` bypasses the default-skip cascade from
-    # validate-inputs when it's skipped (tag pushes don't fire
-    # validate-inputs — it's gated on workflow_dispatch only).
-    # Without this prefix, `needs:` treats "upstream skipped" the
-    # same as "upstream failed" and this job inherits a skip,
-    # regardless of what the explicit `if:` expression below resolves
-    # to. release-0.0.3's first CI run failed exactly this way: every
-    # `needs: [validate-inputs]` warmer/preflight job skipped on the
-    # tag push, downstream consumer jobs then ran on empty caches.
+    # `!cancelled()` overrides GH's implicit success() prefix — without
+    # it, a skipped validate-inputs (every non-dispatch event) cascades
+    # into this job being skipped regardless of the explicit `if:`.
+    # Regressed release-0.0.3's first CI run.
     if: >-
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       (github.event_name == 'pull_request' ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
-        contains(fromJSON('["android","both"]'), inputs.target)))
+        (contains(fromJSON('["android","both"]'), inputs.target) ||
+         inputs.distribution != 'none')))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -333,9 +205,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
 
   # Only fires when an iOS build will consume the xcframework AND the
   # preflight probe did NOT confirm a macOS SDK cache hit. The
@@ -364,9 +233,6 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target)))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -376,42 +242,26 @@ jobs:
           platforms: wasm,ios
           mode: warmer
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
-  # The static-analysis gate for every PR. Always runs. Covers:
-  #   - tsc --noEmit on glow-web
-  #   - eslint on glow-web
-  #   - vitest run on glow-web
-  #   - `cap doctor` — validates Capacitor config + plugin wiring
-  #   - glow-web submodule pushed-to-origin check — catches dev error
-  #     where submodule bump commits to a local-only SHA that CI /
-  #     teammates can't fetch (the 48h cycle that birthed this refactor
-  #     lost ~300 min debugging exactly this kind of silent footgun).
-  #
-  # Explicitly does NOT build Android or iOS — that's the dev's
-  # responsibility to have done locally before pushing. Static analysis
-  # catches type/lint/test regressions; build regressions are caught at
-  # release-tag time or by explicit `workflow_dispatch` of the relevant
-  # build job.
+  # Static-analysis gate: tsc --noEmit + eslint + vitest on glow-web.
+  # Runs on every PR + every tag + every distribution-bound dispatch.
+  # Does NOT build Android/iOS — that's the dev's responsibility before
+  # pushing. Build regressions are caught at release-tag time.
   web:
     name: Web (glow-web submodule)
     runs-on: ubuntu-latest
-    needs: [warm-sdk-linux, validate-inputs]
+    needs: [warm-sdk-linux]
+    # == 'success' on the warmer is the fail-fast route for invalid
+    # dispatches: validate-inputs fails → warmer skips → this check is
+    # false → consumer skips. No direct validate-inputs edge needed.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result != 'failure' &&
+      needs.warm-sdk-linux.result == 'success' &&
       (github.event_name == 'pull_request' ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
-        inputs.target == 'both' && inputs.distribution == 'store'))
-    # Cold-run: build the WASM SDK from source (~10 min) + install
-    # glow-web deps + run tsc/eslint/vitest. Warm cache: ~3 min total.
+        inputs.distribution != 'none'))
     timeout-minutes: 20
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -420,21 +270,11 @@ jobs:
         with:
           platforms: wasm
 
-      # NOTE: a submodule-pushed-to-origin check was considered here, but
-      # is redundant with actions/checkout's own behavior: if the SHA
-      # glow-app pins for glow-web isn't fetchable from origin, the
-      # `submodules: recursive` fetch above fails with "reference is not
-      # a tree" BEFORE this job's steps run. Catching that pre-entry was
-      # the intent; it's already caught upstream with a louder error.
-
       - name: Install glow-web deps + local Spark SDK tgz
-        # The composite action restored the WASM tgz into
-        # $SPARK_SDK_DIR/packages/wasm/. The env var is exported
-        # from setup-glow-app so `make` + this script agree on the
-        # location (workspace-relative to avoid actions/cache's
+        # Overlay the warmer-cached WASM tgz onto @breeztech/breez-sdk-spark
+        # without mutating the lockfile. $SPARK_SDK_DIR is set by
+        # setup-glow-app (workspace-relative to dodge actions/cache's
         # `..`-path rejection).
-        # `npm install <tgz>` overlays it on @breeztech/breez-sdk-spark
-        # without mutating the lockfile.
         run: |
           set -euo pipefail
           TGZ="$SPARK_SDK_DIR/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz"
@@ -456,14 +296,6 @@ jobs:
       - name: Unit tests
         run: cd glow-web && npm run test
 
-      # NOTE: `npx cap doctor` was considered as an extra validation
-      # step but requires ./glow-web/dist to exist (deployment check,
-      # not pure static analysis). Adding it would force `make web`
-      # into the PR gate, which defeats the build-on-demand model.
-      # Plugin-wiring issues will be caught at the first build-dispatch.
-
-      # Upload vitest coverage artifacts on failure for PR-page
-      # drilldown without needing a CI re-run.
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -471,37 +303,20 @@ jobs:
           path: glow-web/coverage/**/*.json
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
-  # Android debug APK compile + artifact upload. Does NOT fire on PR
-  # events or main pushes — devs test locally via `make deploy-android`
-  # before pushing. Triggered explicitly on:
-  #   - release-* tag push (release pipeline pre-flight — fires in parallel
-  #     with android-release to produce a debug APK artifact alongside the
-  #     store-signed AAB)
-  #   - workflow_dispatch with target=android|both AND distribution=none
+  # Android unsigned compile-check. Dispatch-only; release-* tags fall
+  # through to android-release (signed AAB). Symmetric with `ios`.
   android:
     name: Android (assembleDebug)
     runs-on: ubuntu-latest
-    needs: [warm-sdk-linux, validate-inputs]
+    needs: [warm-sdk-linux]
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result != 'failure' &&
-      (startsWith(github.ref, 'refs/tags/release-') ||
-       (github.event_name == 'workflow_dispatch' &&
-        contains(fromJSON('["android","both"]'), inputs.target) &&
-        inputs.distribution == 'none'))
-    # 45 min is cold-run headroom: first run builds the WASM SDK
-    # (~10 min) + Android NDK install (~3 min) + Android AAR
-    # cross-compile (~5 min) + glow-web vite build (~3 min) +
-    # gradle assembleDebug (~5 min). Warm runs with SDK cache hit
-    # are ~8 min.
+      needs.warm-sdk-linux.result == 'success' &&
+      github.event_name == 'workflow_dispatch' &&
+      contains(fromJSON('["android","both"]'), inputs.target) &&
+      inputs.distribution == 'none'
     timeout-minutes: 45
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -519,15 +334,12 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          # Encrypts the Gradle configuration-cache across runs.
-          # Safe without the secret — the action falls back to a
-          # non-encrypted shared cache when omitted.
+          # Falls back to an unencrypted shared cache when the secret is unset.
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       - name: Build glow-web dist/
-        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
-        # time — without it, SDK init fails on every launch and
-        # mnemonic-based onboarding can't even reach the wallet.
+        # VITE_BREEZ_API_KEY is baked into the dist bundle at build time —
+        # without it, SDK init fails on every launch.
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
         run: make web
@@ -538,8 +350,10 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
-      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
-        run: ./scripts/ci/warmup-gradle-wrapper.sh android
+      - name: Compute version
+        # VERSION_NAME={basis}-dev.{short-sha}, VERSION_CODE=GITHUB_RUN_NUMBER.
+        # Gradle reads both via System.getenv() so the APK is traceable.
+        run: ./scripts/ci/compute-version.sh
 
       - name: Gradle assembleDebug
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
@@ -551,8 +365,6 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      # Failure-only upload of gradle / lint reports so the PR page
-      # has enough to diagnose without a CI re-run.
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -562,29 +374,20 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
   ios:
     name: iOS (xcodebuild, unsigned)
     runs-on: macos-15
     needs: [warm-sdk-macos, validate-inputs]
-    # 60 min cold-run headroom: iOS cross-compile is slower than
-    # Android (~15 min), plus xcodebuild itself (~10 min on a cold
-    # Pods cache). Warm runs with SDK + Pods cache hit are ~5 min.
     timeout-minutes: 60
-    # Unsigned compile-check. Does NOT fire on release-* tag push — that
-    # already runs ios-release (signed) which does its own archive build,
-    # and running a duplicate unsigned archive would double the macOS
-    # burn. PRs opt in via the `run-ios` label for dev smoke-testing
-    # when the dev wants CI to confirm the iOS build still compiles.
-    # NB: `!cancelled()` is load-bearing. GH Actions implicitly prepends
-    # `success()` to every `if:` — with `warm-sdk-macos` in `needs:`,
-    # a preflight cache hit (→ warm-sdk-macos SKIPPED) flips the implicit
-    # success() to false and this job skips too, even with our explicit
-    # `!= 'failure'` checks. `!cancelled()` overrides that default and
-    # lets the explicit result checks decide. Learned the hard way via
-    # run 24618034776 — symmetric bug across all three iOS consumers.
+    # Unsigned compile-check. PRs opt in via `run-ios` label. Does NOT fire
+    # on release-* tag push (ios-release already archives there).
+    #
+    # `!cancelled()` is load-bearing across all three iOS consumers: GH
+    # Actions implicitly prepends success() to every `if:`, and with
+    # warm-sdk-macos in needs:, a preflight cache hit (→ warm-sdk-macos
+    # SKIPPED) flips the implicit success() to false — this job skips too,
+    # even with our explicit `!= 'failure'` checks. `!cancelled()` overrides
+    # that default. Regressed run 24618034776.
     if: >-
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
@@ -594,9 +397,6 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'none'))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -606,24 +406,10 @@ jobs:
           platforms: wasm,ios
 
       - name: Select Xcode
-        # Pin Xcode to match local builds. macos-15 ships multiple
-        # Xcode versions; the pin avoids invalidation when GitHub
-        # rotates the default.
+        # Pin Xcode so GitHub's default rotation can't invalidate caches.
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
-      - name: CocoaPods cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ios/App/Pods
-            ~/Library/Caches/CocoaPods
-          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
-          restore-keys: pods-
-
       - name: Build glow-web dist/
-        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
-        # time — without it, SDK init fails on every launch and
-        # mnemonic-based onboarding can't even reach the wallet.
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
         run: make web
@@ -631,26 +417,18 @@ jobs:
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
 
-      - name: Clear Swift PM artifacts cache (flake prevention)
-        # Xcode 26's Swift PM sometimes errors with:
-        #   "failed downloading 'https://github.com/ionic-team/capacitor
-        #    -swift-pm/releases/download/<ver>/Capacitor.xcframework.zip'
-        #    ... already exists in file system"
-        # when a partial/stale binary-target download is in
-        # ~/Library/Caches/org.swift.swiftpm. Clearing ensures a fresh
-        # resolve on each run. ~/Library/Developer/Xcode/DerivedData
-        # is also safe to nuke for consistency but only the swiftpm
-        # cache is the known flake vector.
-        run: rm -rf ~/Library/Caches/org.swift.swiftpm
-
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
+      - name: Compute version
+        run: ./scripts/ci/compute-version.sh
+
+      - name: Apply version to iOS project
+        run: ./scripts/ci/apply-ios-version.sh
+
       - name: xcodebuild (unsigned device build)
-        # Matches the local command in DEVELOPMENT.md. The three
-        # CODE_SIGN_* flags together make xcodebuild stop
-        # negotiating signing — Phase 4C wires signing back up for
-        # TestFlight.
+        # CODE_SIGN_* trio disables all signing negotiation for the
+        # compile-check path. Matches DEVELOPMENT.md's local command.
         run: |
           set -o pipefail
           xcodebuild \
@@ -672,24 +450,16 @@ jobs:
           path: xcodebuild.log
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
   ios-preview:
     name: iOS preview (Firebase App Distribution)
     runs-on: macos-15
     needs: [warm-sdk-macos, validate-inputs]
     # Same cold-run budget as the `ios` job plus FAD upload time.
     timeout-minutes: 60
-    # Tag-triggered (preview-* / rc-*) or manually dispatched.
-    # Does NOT run on every main push — the CI plan-tier analysis
-    # in plan-4b Step 10 assumes a maintainer-chosen cadence to
-    # stay inside Free/Pro/Team macOS-minute quotas.
-    # Fires on preview-*/rc-* tag pushes OR explicit workflow_dispatch
-    # with target=ios|both AND distribution=firebase. distribution=store
-    # routes to ios-release (App Store profile, TestFlight upload) — this
-    # job is the Ad Hoc + Firebase App Distribution path only.
-    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
+    # Fires on preview-*/rc-* tag pushes OR dispatch
+    # (target=ios|both, distribution=firebase).
+    # distribution=store routes to ios-release instead.
+    # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
@@ -707,15 +477,10 @@ jobs:
       P12_PASSWORD: ${{ secrets.IOS_PREVIEW_CERT_P12_PASSWORD }}
       PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PREVIEW_PROFILE_BASE64 }}
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          # release-notes.sh (below) walks `release-*` tags to find the
-          # prior release; the default fetch-depth: 1 would only see HEAD
-          # and output an empty changelog. Symmetric with ios-release.
+          # release-notes.sh walks release-* tags to find the prior release.
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-glow-app
@@ -725,20 +490,6 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
-      - name: CocoaPods cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ios/App/Pods
-            ~/Library/Caches/CocoaPods
-          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
-          restore-keys: pods-
-
-      # Fastlane + firebase_app_distribution plugin drive the FAD upload
-      # (symmetric with ios-release's TestFlight path). bundler-cache: true
-      # restores ~/.gem across runs so `bundle install` is near-instant
-      # on warm runs. working-directory scopes the Gemfile lookup to
-      # ios/App/ where the Gemfile + Gemfile.lock live.
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
@@ -749,9 +500,6 @@ jobs:
         run: ./scripts/ci/import-ios-cert.sh
 
       - name: Build glow-web dist/
-        # VITE_BREEZ_API_KEY is baked into the dist bundle at build
-        # time — without it, SDK init fails on every launch and
-        # mnemonic-based onboarding can't even reach the wallet.
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
         run: make web
@@ -759,34 +507,25 @@ jobs:
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
 
-      - name: Clear Swift PM artifacts cache (flake prevention)
-        # Xcode 26's Swift PM sometimes errors with:
-        #   "failed downloading 'https://github.com/ionic-team/capacitor
-        #    -swift-pm/releases/download/<ver>/Capacitor.xcframework.zip'
-        #    ... already exists in file system"
-        # when a partial/stale binary-target download is in
-        # ~/Library/Caches/org.swift.swiftpm. Clearing ensures a fresh
-        # resolve on each run. ~/Library/Developer/Xcode/DerivedData
-        # is also safe to nuke for consistency but only the swiftpm
-        # cache is the known flake vector.
-        run: rm -rf ~/Library/Caches/org.swift.swiftpm
-
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
+      - name: Compute version
+        # Preview/rc tags → `{basis}-preview.N` / `{basis}-rc.N`;
+        # dispatch-firebase → `{basis}-dev.{short-sha}`.
+        # GITHUB_RUN_NUMBER as VERSION_CODE gives each upload a distinct
+        # (ShortVersion, BundleVersion) tuple so iOS FAD's strict dedup
+        # doesn't collapse uploads into a single slot.
+        run: ./scripts/ci/compute-version.sh
+
+      - name: Apply version to iOS project
+        run: ./scripts/ci/apply-ios-version.sh
+
       - name: Archive + export IPA (Debug, release-testing)
-        # `release-testing` is Xcode 15.3+'s canonical name for what was
-        # historically called `ad-hoc`. build-ios-ipa.sh accepts both
-        # (with a deprecation warning on the old spelling) but passing
-        # the modern name keeps the generated exportOptions.plist
-        # deprecation-free on Xcode 26.
+        # `release-testing` is Xcode 15.3+'s name for the old `ad-hoc`.
         run: ./scripts/ci/build-ios-ipa.sh Debug release-testing
 
       - name: Generate release notes
-        # Derive a human-readable changelog from git (same source the
-        # android-release + ios-release jobs use). Written to a file
-        # under build/ so the next step can heredoc it into the
-        # RELEASE_NOTES env var the fastlane lane reads.
         run: |
           set -euo pipefail
           ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
@@ -794,14 +533,9 @@ jobs:
           cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
 
       - name: Upload to Firebase App Distribution (fastlane)
-        # Invokes the :upload_firebase lane in ios/App/fastlane/Fastfile,
-        # which wraps Google's firebase_app_distribution plugin (the
-        # approach Firebase's official iOS distribution docs recommend).
-        # Env-var naming — FIREBASE_SERVICE_ACCOUNT_JSON is the lane-local
-        # name; we map it from the GitHub secret FIREBASE_SERVICE_ACCOUNT_KEY
-        # here so the Fastfile stays decoupled from the secret key name.
-        # IPA_PATH uses the absolute workspace path because build-ios-ipa.sh
-        # writes to repo-root build/, not ios/App/build/.
+        # :upload_firebase lane wraps firebase_app_distribution. IPA_PATH
+        # is absolute because build-ios-ipa.sh writes to repo-root build/,
+        # not ios/App/build/.
         working-directory: ios/App
         env:
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID_PREVIEW }}
@@ -822,9 +556,6 @@ jobs:
           path: build/App.xcarchive
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
   # ---------------------------------------------------------------
   # Phase 4C jobs below. preview-* / rc-* tags add Android FAD;
   # release-* tags fan out to android-release + ios-release, then
@@ -834,37 +565,29 @@ jobs:
   android-preview:
     name: Android preview (Firebase App Distribution)
     runs-on: ubuntu-latest
-    needs: [warm-sdk-linux, validate-inputs]
+    needs: [warm-sdk-linux]
     timeout-minutes: 30
-    # Parity with ios-preview: fires on preview-*/rc-* tag pushes OR
-    # explicit dispatch with target=android|both AND distribution=firebase.
-    # No main-push trigger.
-    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
+    # Parity with ios-preview. `!cancelled()` load-bearing — see `ios` above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result != 'failure' &&
-      needs.warm-sdk-linux.result != 'failure' &&
+      needs.warm-sdk-linux.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/preview-') ||
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'firebase'))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
-          # release-notes.sh walks `release-*` tags to find the prior
-          # release; fetch-depth: 0 gives us the full tag history.
+          # release-notes.sh walks release-* tags to find the prior release.
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-glow-app
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -873,11 +596,6 @@ jobs:
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      # Fastlane + firebase_app_distribution plugin drive the FAD upload
-      # (symmetric with ios-preview). bundler-cache: true restores the
-      # gem cache across runs so `bundle install` is near-instant on
-      # warm runs; working-directory scopes the Gemfile lookup to
-      # android/ where the Gemfile + Gemfile.lock live.
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.3'
@@ -895,15 +613,13 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
-      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
-        run: ./scripts/ci/warmup-gradle-wrapper.sh android
+      - name: Compute version
+        run: ./scripts/ci/compute-version.sh
 
       - name: Gradle assembleDebug
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Generate release notes
-        # Same source the ios-preview + *-release jobs use. Written to
-        # build/ so the next step can heredoc it into RELEASE_NOTES.
         run: |
           set -euo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/build"
@@ -912,13 +628,6 @@ jobs:
           cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
 
       - name: Upload to Firebase App Distribution (fastlane)
-        # Invokes the :upload_firebase lane in android/fastlane/Fastfile,
-        # which wraps Google's firebase_app_distribution plugin (the
-        # approach Firebase's official Android distribution docs
-        # recommend). Env-var naming: FIREBASE_SERVICE_ACCOUNT_JSON is
-        # the lane-local name; we map it from the GitHub secret
-        # FIREBASE_SERVICE_ACCOUNT_KEY here so the Fastfile stays
-        # decoupled from the secret key name.
         working-directory: android
         env:
           FIREBASE_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID_PREVIEW }}
@@ -941,45 +650,33 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
   android-release:
     name: Android release (Play Internal)
     runs-on: ubuntu-latest
-    needs: [warm-sdk-linux, validate-inputs]
-    # Cold-run budget: web + WASM build + Android NDK + AAR
-    # cross-compile + bundleRelease + Play upload. With cache hits
-    # the Play upload itself is the slowest step (~2-3 min).
+    needs: [warm-sdk-linux]
     timeout-minutes: 45
-    # release-* tag push (full release pipeline) OR workflow_dispatch
-    # with target=android|both AND distribution=store. Pair with
-    # dry_run=true to verify the upload pipeline without publishing.
-    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
+    # release-* tag push OR dispatch (target=android|both, distribution=store).
+    # dry_run=true verifies the upload pipeline without publishing.
+    # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
       !cancelled() &&
-      needs.validate-inputs.result != 'failure' &&
-      needs.warm-sdk-linux.result != 'failure' &&
+      needs.warm-sdk-linux.result == 'success' &&
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
-          # Need full history so release-notes.sh can find the prior
-          # release-* tag. Default fetch-depth: 1 would only see HEAD.
+          # Full history so release-notes.sh can find the prior release-* tag.
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-glow-app
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -991,11 +688,8 @@ jobs:
       - name: Decode release keystore
         env:
           RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
-        # Strip whitespace before decode. `base64 -i file` commonly
-        # wraps at 76 chars with LF separators; if the secret also
-        # picked up a trailing newline from `gh secret set < file`,
-        # GNU base64 may fail with "invalid input". tr -d removes
-        # any whitespace safely (valid base64 only uses [A-Za-z0-9+/=]).
+        # tr -d strips whitespace before decode — `gh secret set < file`
+        # can introduce wrapping/LF that makes GNU base64 reject the input.
         run: |
           set -euo pipefail
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
@@ -1022,17 +716,10 @@ jobs:
         run: ./scripts/ci/compute-version.sh
 
       - name: Generate release notes
-        # GPP reads from the release-notes file path; we overwrite
-        # the en-US/internal.txt placeholder with the git-log
-        # output before publishReleaseBundle runs.
-        #
-        # Play caps release notes at 500 chars per locale. Longer
-        # notes cause GPP's edits:commit to fail with:
-        #   "The release created has notes in language en-US with
-        #    length N, which is too long (max: 500)"
-        # Truncate to 497 chars + "…" preserving the first few
-        # commit subjects (most recent work first, since git log
-        # output is newest-to-oldest by default).
+        # Play caps release notes at 500 chars per locale — GPP's
+        # edits:commit fails with "length N, which is too long (max: 500)"
+        # otherwise. Truncate to 497 + "…"; git log is newest-first so the
+        # most recent commit subjects survive.
         run: |
           set -euo pipefail
           FULL_NOTES="$(./scripts/ci/release-notes.sh)"
@@ -1055,9 +742,6 @@ jobs:
 
       - name: Capacitor sync (Android)
         run: npx cap sync android
-
-      - name: Warm up Gradle wrapper distribution (absorb transient 504s)
-        run: ./scripts/ci/warmup-gradle-wrapper.sh android
 
       - name: Gradle bundleRelease + publish
         env:
@@ -1083,28 +767,15 @@ jobs:
             android/build/reports/**/*
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
     needs: [warm-sdk-macos, validate-inputs]
-    # Cold-run budget: web + WASM + iOS xframework cross-compile +
-    # Pods install + xcodebuild archive + IPA export + TestFlight
-    # upload. ASC-side processing time is excluded
-    # (skip_waiting_for_build_processing in Fastfile).
     timeout-minutes: 75
-    # Fires on:
-    # - release-* tag push: cuts the iOS side of a full release
-    #   (paired with android-release + release-github).
-    # - workflow_dispatch with target=ios distribution=store: iOS-only
-    #   hotfix rebuild against whatever ref the dispatch targeted,
-    #   without re-firing android-release / release-github.
-    # - workflow_dispatch with target=both distribution=store: fires
-    #   alongside android-release. Pair with dry_run=true to verify
-    #   the full release pipeline without uploading.
-    # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
+    # release-* tag push (paired with android-release + release-github) OR
+    # dispatch (target=ios|both, distribution=store). target=ios dispatch
+    # = iOS-only hotfix rebuild without firing android-release / release-github.
+    # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
@@ -1114,10 +785,7 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: recursive
           # release-notes.sh needs full tag history.
@@ -1129,15 +797,6 @@ jobs:
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
-
-      - name: CocoaPods cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ios/App/Pods
-            ~/Library/Caches/CocoaPods
-          key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
-          restore-keys: pods-
 
       - uses: ruby/setup-ruby@v1
         with:
@@ -1153,22 +812,15 @@ jobs:
       - name: Install glow-app deps
         run: npm ci
 
-      - name: Clear Swift PM artifacts cache (flake prevention)
-        run: rm -rf ~/Library/Caches/org.swift.swiftpm
-
       - name: Capacitor sync (iOS)
-        # Run BEFORE apply-ios-version + signing. cap sync rewrites
-        # Pods refs but preserves CURRENT_PROJECT_VERSION /
-        # MARKETING_VERSION; running it first ensures version +
-        # signing both land on the post-sync project state.
+        # Before apply-ios-version — cap sync rewrites project refs but
+        # preserves version settings.
         run: npx cap sync ios
 
       - name: Compute version from tag
-        # GitHub Actions silently ignores attempts to override default
-        # env vars like GITHUB_REF_NAME via $GITHUB_ENV — so the initial
-        # ios-hotfix dispatch shipped a build versioned 0.0.0. Pass the
-        # override via our own GLOW_RELEASE_TAG env var, which
-        # compute-version.sh consults first (see script header).
+        # GH Actions silently ignores overrides of GITHUB_REF_NAME via
+        # $GITHUB_ENV — the ios-hotfix dispatch shipped 0.0.0 because of
+        # this. GLOW_RELEASE_TAG is compute-version.sh's explicit override.
         env:
           GLOW_RELEASE_TAG: >-
             ${{ (github.event_name == 'workflow_dispatch' &&
@@ -1209,24 +861,18 @@ jobs:
       - name: Upload to TestFlight via fastlane
         working-directory: ios/App
         env:
-          # Dual auth — Fastfile picks API key if all three are set,
-          # falls back to FASTLANE_USER/PASSWORD otherwise. Missing
-          # secrets render as empty strings; the Fastfile's
-          # `env_present?` helper treats "" as absent.
+          # Dual auth — Fastfile picks API key if all three set, else
+          # falls back to FASTLANE_USER/PASSWORD. `env_present?` treats
+          # empty-string secrets as absent.
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
           FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
           FASTLANE_PASSWORD: ${{ secrets.FASTLANE_PASSWORD }}
-          # Optional — 2FA session cookie. Only needed on legacy path
-          # for `upload_to_testflight` changelog updates against a
-          # 2FA-protected Apple ID. Generate locally via
-          # `fastlane spaceauth -u <email>`; expires every few weeks.
+          # 2FA session cookie; legacy path only, expires every few weeks.
           FASTLANE_SESSION: ${{ secrets.FASTLANE_SESSION }}
-          # build-ios-ipa.sh writes to $GITHUB_WORKSPACE/build/App.ipa
-          # (repo-root build/). fastlane's working-directory is
-          # ios/App/, so we pass the absolute path via the IPA_PATH
-          # override the Fastfile reads.
+          # Absolute — build-ios-ipa.sh writes to repo-root build/, not
+          # ios/App/build/.
           IPA_PATH: ${{ github.workspace }}/build/App.ipa
         run: bundle exec fastlane upload
 
@@ -1244,27 +890,17 @@ jobs:
           path: build/App.xcarchive
           retention-days: 7
 
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
-
-  # Publishes a GitHub Release tagged `release-X.Y.Z` with the AAB +
-  # IPA artifacts from the upstream jobs. ONLY fires on an actual
-  # release-* tag push — a target=both distribution=store dispatch
-  # builds the same artifacts but intentionally does NOT publish a GH
-  # Release (there is no tag to attach it to).
+  # Publishes a GitHub Release with AAB + IPA artifacts. ONLY fires on
+  # release-* tag push — target=both distribution=store dispatches build
+  # the same artifacts but don't publish (no tag to attach to).
   release-github:
     name: Publish GitHub Release
     needs: [android-release, ios-release]
     runs-on: ubuntu-latest
-    # `!cancelled()` + explicit success checks on both upstreams.
-    # release-0.0.3's first attempt had both android-release and
-    # ios-release ending at 'success' but release-github still skipped
-    # because a transitive upstream (validate-inputs, which is
-    # dispatch-only) was 'skipped' — and the default skip-cascade
-    # propagates through transitively unless a condition explicitly
-    # overrides it. Explicitly require both upstreams to have
-    # succeeded so we don't publish a GH Release with missing
-    # artifacts.
+    # `!cancelled()` + explicit == 'success' on both upstreams — the
+    # default skip-cascade through transitive validate-inputs would
+    # otherwise skip this job even when both upstreams finished clean
+    # (regressed release-0.0.3's first attempt).
     if: >-
       !cancelled() &&
       needs.android-release.result == 'success' &&
@@ -1274,10 +910,7 @@ jobs:
       # softprops/action-gh-release needs write to mutate releases.
       contents: write
     steps:
-      - name: Mark job start
-        run: echo "JOB_START=$(date +%s)" >> "$GITHUB_ENV"
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -1302,6 +935,3 @@ jobs:
             artifacts/**/*.ipa
           prerelease: false
           make_latest: true
-
-      - uses: ./.github/actions/report-billable-cost
-        if: always()
