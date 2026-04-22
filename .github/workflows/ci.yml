@@ -686,10 +686,9 @@ jobs:
     # in plan-4b Step 10 assumes a maintainer-chosen cadence to
     # stay inside Free/Pro/Team macOS-minute quotas.
     # Fires on preview-*/rc-* tag pushes OR explicit workflow_dispatch
-    # with target=ios|both AND distribution=firebase. Explicitly NOT
-    # fired when distribution=store — the .dev ad-hoc provisioning
-    # profile is currently broken (see DEVELOPMENT.md follow-ups), so
-    # only trigger the upload path when the dev explicitly asks for it.
+    # with target=ios|both AND distribution=firebase. distribution=store
+    # routes to ios-release (App Store profile, TestFlight upload) — this
+    # job is the Ad Hoc + Firebase App Distribution path only.
     # NB: `!cancelled()` is load-bearing — see comment on `ios` job above.
     if: >-
       !cancelled() &&
@@ -714,6 +713,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          # release-notes.sh (below) walks `release-*` tags to find the
+          # prior release; the default fetch-depth: 1 would only see HEAD
+          # and output an empty changelog. Symmetric with ios-release.
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-glow-app
         with:
@@ -730,6 +733,17 @@ jobs:
             ~/Library/Caches/CocoaPods
           key: pods-${{ hashFiles('ios/App/Podfile.lock') }}
           restore-keys: pods-
+
+      # Fastlane + firebase_app_distribution plugin drive the FAD upload
+      # (symmetric with ios-release's TestFlight path). bundler-cache: true
+      # restores ~/.gem across runs so `bundle install` is near-instant
+      # on warm runs. working-directory scopes the Gemfile lookup to
+      # ios/App/ where the Gemfile + Gemfile.lock live.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: ios/App
 
       - name: Import distribution cert + ad-hoc profile
         run: ./scripts/ci/import-ios-cert.sh
@@ -760,20 +774,45 @@ jobs:
       - name: Capacitor sync (iOS)
         run: npx cap sync ios
 
-      - name: Archive + export IPA (Debug, ad-hoc)
-        run: ./scripts/ci/build-ios-ipa.sh Debug ad-hoc
+      - name: Archive + export IPA (Debug, release-testing)
+        # `release-testing` is Xcode 15.3+'s canonical name for what was
+        # historically called `ad-hoc`. build-ios-ipa.sh accepts both
+        # (with a deprecation warning on the old spelling) but passing
+        # the modern name keeps the generated exportOptions.plist
+        # deprecation-free on Xcode 26.
+        run: ./scripts/ci/build-ios-ipa.sh Debug release-testing
 
-      - name: Upload to Firebase App Distribution
-        uses: wzieba/Firebase-Distribution-Github-Action@v1
-        with:
-          appId: ${{ secrets.FIREBASE_IOS_APP_ID_PREVIEW }}
-          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
-          groups: internal
-          releaseNotes: |
-            Trigger: ${{ github.ref_name }} (${{ github.event_name }})
-            Commit: ${{ github.sha }}
-            Message: ${{ github.event.head_commit.message || 'manual dispatch' }}
-          file: build/App.ipa
+      - name: Generate release notes
+        # Derive a human-readable changelog from git (same source the
+        # android-release + ios-release jobs use). Written to a file
+        # under build/ so the next step can heredoc it into the
+        # RELEASE_NOTES env var the fastlane lane reads.
+        run: |
+          set -euo pipefail
+          ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+          echo "=== release-notes.txt ==="
+          cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
+
+      - name: Upload to Firebase App Distribution (fastlane)
+        # Invokes the :upload_firebase lane in ios/App/fastlane/Fastfile,
+        # which wraps Google's firebase_app_distribution plugin (the
+        # approach Firebase's official iOS distribution docs recommend).
+        # Env-var naming — FIREBASE_SERVICE_ACCOUNT_JSON is the lane-local
+        # name; we map it from the GitHub secret FIREBASE_SERVICE_ACCOUNT_KEY
+        # here so the Fastfile stays decoupled from the secret key name.
+        # IPA_PATH uses the absolute workspace path because build-ios-ipa.sh
+        # writes to repo-root build/, not ios/App/build/.
+        working-directory: ios/App
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID_PREVIEW }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          IPA_PATH: ${{ github.workspace }}/build/App.ipa
+          FAD_GROUPS: internal
+          RELEASE_NOTES_FILE: ${{ github.workspace }}/build/release-notes.txt
+        run: |
+          set -euo pipefail
+          export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
+          bundle exec fastlane upload_firebase
 
       - name: Upload archive on failure
         uses: actions/upload-artifact@v4
@@ -817,6 +856,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          # release-notes.sh walks `release-*` tags to find the prior
+          # release; fetch-depth: 0 gives us the full tag history.
+          fetch-depth: 0
 
       - uses: ./.github/actions/setup-glow-app
         with:
@@ -830,6 +872,17 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      # Fastlane + firebase_app_distribution plugin drive the FAD upload
+      # (symmetric with ios-preview). bundler-cache: true restores the
+      # gem cache across runs so `bundle install` is near-instant on
+      # warm runs; working-directory scopes the Gemfile lookup to
+      # android/ where the Gemfile + Gemfile.lock live.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: android
 
       - name: Build glow-web dist/
         env:
@@ -848,17 +901,36 @@ jobs:
       - name: Gradle assembleDebug
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
-      - name: Upload to Firebase App Distribution
-        uses: wzieba/Firebase-Distribution-Github-Action@v1
-        with:
-          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID_PREVIEW }}
-          serviceCredentialsFileContent: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
-          groups: internal
-          releaseNotes: |
-            Trigger: ${{ github.ref_name }} (${{ github.event_name }})
-            Commit: ${{ github.sha }}
-            Message: ${{ github.event.head_commit.message || 'manual dispatch' }}
-          file: android/app/build/outputs/apk/debug/app-debug.apk
+      - name: Generate release notes
+        # Same source the ios-preview + *-release jobs use. Written to
+        # build/ so the next step can heredoc it into RELEASE_NOTES.
+        run: |
+          set -euo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/build"
+          ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+          echo "=== release-notes.txt ==="
+          cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
+
+      - name: Upload to Firebase App Distribution (fastlane)
+        # Invokes the :upload_firebase lane in android/fastlane/Fastfile,
+        # which wraps Google's firebase_app_distribution plugin (the
+        # approach Firebase's official Android distribution docs
+        # recommend). Env-var naming: FIREBASE_SERVICE_ACCOUNT_JSON is
+        # the lane-local name; we map it from the GitHub secret
+        # FIREBASE_SERVICE_ACCOUNT_KEY here so the Fastfile stays
+        # decoupled from the secret key name.
+        working-directory: android
+        env:
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID_PREVIEW }}
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          ANDROID_ARTIFACT_PATH: ${{ github.workspace }}/android/app/build/outputs/apk/debug/app-debug.apk
+          ANDROID_ARTIFACT_TYPE: APK
+          FAD_GROUPS: internal
+          RELEASE_NOTES_FILE: ${{ github.workspace }}/build/release-notes.txt
+        run: |
+          set -euo pipefail
+          export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
+          bundle exec fastlane upload_firebase
 
       - uses: actions/upload-artifact@v4
         if: failure()
@@ -1121,7 +1193,9 @@ jobs:
       - name: Import distribution cert + app-store profile
         # Maps the IOS_RELEASE_* secrets onto the generic env vars
         # import-ios-cert.sh reads. Same cert as ios-preview; only
-        # the profile differs (app-store vs ad-hoc).
+        # the profile differs (app-store vs ad-hoc). EXPECTED_* vars
+        # fail fast if IOS_RELEASE_PROFILE_BASE64 holds the wrong
+        # type (symmetric guard with ios-preview).
         env:
           P12_BASE64: ${{ secrets.IOS_RELEASE_CERT_P12_BASE64 }}
           P12_PASSWORD: ${{ secrets.IOS_RELEASE_CERT_P12_PASSWORD }}
@@ -1129,7 +1203,7 @@ jobs:
           PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_RELEASE_PROFILE_BASE64 }}
         run: ./scripts/ci/import-ios-cert.sh
 
-      - name: Archive + export IPA (Release, app-store)
+      - name: Archive + export IPA (Release, app-store-connect)
         run: ./scripts/ci/build-ios-ipa.sh Release app-store-connect
 
       - name: Upload to TestFlight via fastlane

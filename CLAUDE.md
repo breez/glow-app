@@ -288,9 +288,12 @@ work lives in `.github/` plus small accommodations in `Makefile`,
     Label-gated on PRs via the `run-ios` label to contain
     macOS-minute burn; always runs on `main` pushes, `preview-*`
     / `rc-*` tags, and `workflow_dispatch`.
-  - `ios-preview` (macos-15) — ad-hoc signed IPA uploaded to
-    Firebase App Distribution. Tag-triggered (`preview-*` /
-    `rc-*`) + manually dispatchable. Not on every main push.
+  - `ios-preview` (macos-15) — Ad Hoc signed IPA uploaded to
+    Firebase App Distribution via fastlane's
+    `firebase_app_distribution` plugin (`:upload_firebase` lane).
+    Tag-triggered (`preview-*` / `rc-*`) + manually dispatchable
+    via `workflow_dispatch`. Delivers to the `internal` tester
+    group. Not on every main push.
 - `.github/dependabot.yml` — weekly update PRs for npm (glow-app
   root + glow-web + both in-house plugins), Gradle (Android),
   and `github-actions`. `@capacitor/keyboard` and
@@ -325,18 +328,28 @@ job).
 
 ### iOS preview signing scripts
 
-Two bash scripts at `scripts/ci/` handle the ad-hoc signing
-the `ios-preview` job needs:
+Two bash scripts at `scripts/ci/` handle the Ad Hoc signing the
+`ios-preview` job needs. Both are shared with `ios-release`
+(same cert, different profile + export method).
 
-- `import-ios-ad-hoc-cert.sh` — creates a temp keychain,
-  imports the base64-encoded `.p12` distribution cert,
-  installs the provisioning profile into
-  `~/Library/MobileDevice/Provisioning Profiles/`. Reads
-  three env vars: `P12_BASE64`, `P12_PASSWORD`,
-  `PROVISIONING_PROFILE_BASE64`.
+- `import-ios-cert.sh` — creates a temp keychain, imports the
+  base64-encoded `.p12` distribution cert, installs the
+  provisioning profile into
+  `~/Library/MobileDevice/Provisioning Profiles/`. Reads generic
+  env vars `P12_BASE64`, `P12_PASSWORD`,
+  `PROVISIONING_PROFILE_BASE64`, `KEYCHAIN_PASSWORD`. Logs the
+  derived profile type + provisioned-device count for
+  debuggability, but does not assert — keeps the script
+  permissive for local dev. A wrong-type profile will still fail,
+  just later at the xcodebuild export step.
 - `build-ios-ipa.sh` — `xcodebuild archive` +
-  `xcodebuild -exportArchive` with a `method=ad-hoc`
-  exportOptions.plist. Writes `build/App.ipa`.
+  `xcodebuild -exportArchive`. Accepts `$1` configuration
+  (Debug | Release) and `$2` method — canonicalised on
+  `release-testing` | `app-store-connect` (Xcode 15.3+ /
+  Xcode 26 names). Old `ad-hoc` / `app-store` spellings are
+  accepted as deprecation aliases and remapped with a warning
+  so the generated exportOptions.plist always writes the
+  modern value. Writes `build/App.ipa` at the repo root.
 
 ### PR-label gating for iOS
 
@@ -364,7 +377,7 @@ and Android release secrets (not yet listed — pending Android path).
 |--------|-------|---------|
 | `VITE_BREEZ_API_KEY` | 4A | Baked into the web bundle at build time |
 | `GRADLE_ENCRYPTION_KEY` | 4B | Gradle config-cache encryption (optional) |
-| `FIREBASE_SERVICE_ACCOUNT_KEY` | 4B | Firebase service-account JSON (project-scoped; covers dev + prod apps) |
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | 4B | Firebase service-account JSON (project-scoped; covers dev + prod apps). SA must hold `roles/firebaseappdistro.admin` on `breez-technology` — the Firebase Admin SDK service-agent role is NOT sufficient. |
 | `FIREBASE_IOS_APP_ID_PREVIEW` | 4B | Firebase App Distribution iOS app id (Glow Dev — for `.dev` ad-hoc uploads) |
 | `FIREBASE_ANDROID_APP_ID_PREVIEW` | 4C | Firebase App Distribution Android app id (Glow Dev — for `.dev` debug APK uploads) |
 | `IOS_PREVIEW_CERT_P12_BASE64` | 4B | Apple Distribution cert `.p12` (base64) — same cert as IOS_RELEASE_*, mirrored |
@@ -487,7 +500,9 @@ maintainer pointer list.
   for app-store) onto those generic env names.
 - `scripts/ci/build-ios-ipa.sh` accepts two args: `$1`
   configuration (Debug | Release) and `$2` export method
-  (ad-hoc | app-store). Writes `build/App.xcarchive/` +
+  (`release-testing` | `app-store-connect`; legacy
+  `ad-hoc` / `app-store` accepted as deprecation aliases
+  and auto-remapped). Writes `build/App.xcarchive/` +
   `build/App.ipa` at the repo root regardless.
 - Same Apple Distribution cert (SHA-1
   `6C:97:AD:24…A5:BA`) signs both ad-hoc and app-store
@@ -503,13 +518,23 @@ maintainer pointer list.
   - `IOS_RELEASE_PROFILE_BASE64` — app-store for
     `technology.breez.glow`. Auto-renews when the profile
     expires (1yr) — manual step to download + re-base64.
-- `ios/App/Gemfile` + `ios/App/fastlane/{Appfile,Fastfile}`
-  — fastlane retained ONLY for `upload_to_testflight` (wraps
-  altool + handles changelog update post-upload). Lane
-  renamed from `beta` to `upload` — it only uploads; build
-  happens in the shell scripts. Run `bundle install` once
-  locally to generate `Gemfile.lock` (system Ruby 2.6 too
+- `ios/App/Gemfile` + `ios/App/fastlane/{Appfile,Fastfile,Pluginfile}`
+  — fastlane drives BOTH iOS distribution flows' upload step.
+  Two lanes:
+  - `:upload` (TestFlight) — wraps
+    `upload_to_testflight` (altool + ASC changelog update).
+  - `:upload_firebase` (Firebase App Distribution, ios-preview)
+    — wraps the `firebase_app_distribution` plugin declared in
+    `fastlane/Pluginfile`. This is the approach Firebase's
+    [official iOS distribution docs][fad-ios-docs] recommend.
+    `android/fastlane/Fastfile` mirrors this lane for Android FAD
+    previews (see "android-preview fastlane" below).
+  Build always happens in the shell scripts; fastlane is used
+  ONLY for the upload step on both lanes. Run `bundle install`
+  once locally to generate `Gemfile.lock` (system Ruby 2.6 too
   old; needs 3.x via rbenv/asdf).
+
+[fad-ios-docs]: https://firebase.google.com/docs/app-distribution/ios/distribute-fastlane
 - **Dual auth** in Fastfile — auto-selects first available:
   - App Store Connect API key (`APP_STORE_CONNECT_API_KEY_ID`
     + `ISSUER_ID` + `KEY_BASE64`) — preferred, stable on CI,
@@ -567,9 +592,17 @@ maintainer pointer list.
 Three new jobs gated on `release-*` tag pushes plus a fourth
 on `preview-*` / `rc-*`:
 
-- `android-preview` — Firebase App Distribution upload
-  (parity with 4B's `ios-preview`). Uses existing
-  `FIREBASE_SERVICE_ACCOUNT_KEY` + new `FIREBASE_ANDROID_APP_ID_PREVIEW`.
+- `android-preview` — debug APK uploaded to Firebase App
+  Distribution via the `firebase_app_distribution` fastlane
+  plugin ([official Android docs][fad-android-docs]). Structure
+  mirrors `ios-preview`: `./gradlew :app:assembleDebug` builds,
+  then `bundle exec fastlane upload_firebase` uploads from
+  `android/`. Uses `FIREBASE_SERVICE_ACCOUNT_KEY` +
+  `FIREBASE_ANDROID_APP_ID_PREVIEW`. The SA must hold
+  `roles/firebaseappdistro.admin` on `breez-technology` —
+  fastlane returns a clear 403 if missing.
+
+[fad-android-docs]: https://firebase.google.com/docs/app-distribution/android/distribute-fastlane?apptype=apk
 - `android-release` — `bundleRelease` + `publishReleaseBundle`
   via gradle-play-publisher. Needs `RELEASE_KEYSTORE_*` +
   `PLAY_SERVICE_ACCOUNT_JSON` secrets. Uses

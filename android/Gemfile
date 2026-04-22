@@ -1,0 +1,16 @@
+source "https://rubygems.org"
+
+# Fastlane drives android-preview's Firebase App Distribution upload,
+# symmetric with the iOS side (see ios/App/Gemfile). Only the upload
+# step goes through fastlane — the APK build still runs via Gradle
+# (`./gradlew :app:assembleDebug`).
+#
+# CI uses `bundler-cache: true` on ruby/setup-ruby so the Gemfile.lock
+# + ~/.gem cache are restored between runs.
+gem "fastlane"
+
+# Pull in plugin declarations. `fastlane add_plugin` writes this
+# `eval_gemfile` line automatically; committing both files keeps the
+# plugin graph reproducible across CI + local devs.
+plugins_path = File.join(File.dirname(__FILE__), "fastlane", "Pluginfile")
+eval_gemfile(plugins_path) if File.exist?(plugins_path)
