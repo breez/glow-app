@@ -1,0 +1,58 @@
+default_platform(:android)
+
+# android-preview — upload the pre-built debug APK to Firebase App
+# Distribution. The build runs upstream via
+# `./gradlew :app:assembleDebug`; fastlane is used ONLY for the upload
+# step (matching the iOS side's :upload_firebase lane in
+# ios/App/fastlane/Fastfile).
+#
+# Expected env vars:
+#   FIREBASE_APP_ID                — e.g. 1:463327817067:android:HASH
+#   FIREBASE_SERVICE_ACCOUNT_JSON  — raw JSON body of the SA key (NOT
+#                                    a path; NOT base64). The plugin
+#                                    expects a file path, so we write
+#                                    the JSON to a tempfile + pass it.
+#   ANDROID_ARTIFACT_PATH (opt.)   — absolute path to the artifact.
+#                                    Defaults to
+#                                    app/build/outputs/apk/debug/app-debug.apk
+#                                    (relative to this Fastfile's
+#                                    working dir — i.e. android/).
+#   ANDROID_ARTIFACT_TYPE (opt.)   — "APK" or "AAB". Defaults to "APK".
+#   FAD_GROUPS (opt.)              — comma-separated tester group
+#                                    aliases. Defaults to "internal".
+#   RELEASE_NOTES (opt.)           — text body; defaults to empty.
+
+platform :android do
+  desc "Upload the pre-built debug APK to Firebase App Distribution"
+  lane :upload_firebase do
+    UI.user_error!("FIREBASE_APP_ID must be set") if ENV["FIREBASE_APP_ID"].to_s.empty?
+    UI.user_error!("FIREBASE_SERVICE_ACCOUNT_JSON must be set") if ENV["FIREBASE_SERVICE_ACCOUNT_JSON"].to_s.empty?
+
+    # The firebase_app_distribution plugin authenticates via a file
+    # path, not inline JSON. Write the SA key to a temp file with
+    # 0600 perms, pass the path, and tear it down in the ensure block.
+    require "tmpdir"
+    require "fileutils"
+    sa_dir = Dir.mktmpdir("glow-fad-sa")
+    sa_path = File.join(sa_dir, "service-account.json")
+    File.write(sa_path, ENV.fetch("FIREBASE_SERVICE_ACCOUNT_JSON"))
+    FileUtils.chmod(0600, sa_path)
+
+    artifact_path = ENV["ANDROID_ARTIFACT_PATH"] || "app/build/outputs/apk/debug/app-debug.apk"
+    artifact_type = ENV["ANDROID_ARTIFACT_TYPE"] || "APK"
+    groups = ENV["FAD_GROUPS"] || "internal"
+
+    UI.message("Uploading #{artifact_path} (#{artifact_type}) to FAD app #{ENV.fetch('FIREBASE_APP_ID')} → groups: #{groups}")
+
+    firebase_app_distribution(
+      app: ENV.fetch("FIREBASE_APP_ID"),
+      service_credentials_file: sa_path,
+      android_artifact_path: artifact_path,
+      android_artifact_type: artifact_type,
+      groups: groups,
+      release_notes: ENV["RELEASE_NOTES"].to_s,
+    )
+  ensure
+    FileUtils.rm_rf(sa_dir) if defined?(sa_dir) && sa_dir
+  end
+end

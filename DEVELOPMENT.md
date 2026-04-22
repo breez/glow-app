@@ -289,6 +289,16 @@ git push origin preview-$(date +%Y%m%d)
 
 Delete one-off test tags afterwards: `git push origin :refs/tags/preview-test1`.
 
+Both jobs upload via the `firebase_app_distribution` fastlane
+plugin (the approach Firebase's official docs recommend for
+[iOS][fad-ios] and [Android][fad-android]). Each platform owns a
+`:upload_firebase` lane at `<platform>/fastlane/Fastfile`; the
+build step runs upstream (xcodebuild for iOS, Gradle for Android)
+and fastlane handles only the upload.
+
+[fad-ios]: https://firebase.google.com/docs/app-distribution/ios/distribute-fastlane
+[fad-android]: https://firebase.google.com/docs/app-distribution/android/distribute-fastlane?apptype=apk
+
 ### Dependabot + CodeQL
 
 - **Dependabot** (`.github/dependabot.yml`) — weekly npm (×4), Gradle,
@@ -318,8 +328,9 @@ every commit: `SPARK_SDK_ALLOW_DRIFT=1 make resolve-sdk`.
 
 ### Firebase setup
 
-glow-app uses the existing Breez Firebase project for ad-hoc
-iOS previews.
+glow-app uses the existing Breez Firebase project for preview
+distribution on both platforms — Ad Hoc IPA (iOS) + Debug APK
+(Android) shipped to Firebase App Distribution.
 
 | Thing | Value |
 |-------|-------|
@@ -328,7 +339,7 @@ iOS previews.
 | iOS app ("Glow Debug") — bundle ID | `technology.breez.glow.dev` |
 | iOS app — Firebase App ID (stored in `FIREBASE_IOS_APP_ID_PREVIEW`) | `1:463327817067:ios:6a85ef20ff5f9860b2b02e` |
 | Android app ("Glow Debug") — package | `technology.breez.glow.dev` |
-| Android app — Firebase App ID (reserved for Phase 4C) | `1:463327817067:android:a89e8ebd1b81c7f1b2b02e` |
+| Android app — Firebase App ID (stored in `FIREBASE_ANDROID_APP_ID_PREVIEW`) | `1:463327817067:android:a89e8ebd1b81c7f1b2b02e` |
 | Tester group alias | `internal` |
 
 To reproduce or verify with `firebase-tools`:
@@ -347,7 +358,15 @@ firebase apps:sdkconfig IOS 1:463327817067:ios:6a85ef20ff5f9860b2b02e \
    Service accounts → Generate new private key (JSON). Store
    the raw JSON (not base64) as the `FIREBASE_SERVICE_ACCOUNT_KEY`
    GitHub secret.
-2. **Add testers** to the `internal` group:
+2. **Grant the service account `roles/firebaseappdistro.admin`**
+   at project scope. GCP Console → IAM & Admin → IAM → find the
+   principal by `client_email` from the JSON → Add role →
+   "Firebase App Distribution Admin". Without this the upload
+   fails with `HTTP 403 — The caller does not have permission`.
+   Per-app scoping is not needed. Also confirm the Firebase
+   Management API is enabled (APIs & Services → Enabled APIs) —
+   a disabled API returns 403, not 404, a common red herring.
+3. **Add testers** to the `internal` group:
    ```bash
    firebase appdistribution:testers:add \
      --project breez-technology \
@@ -356,20 +375,81 @@ firebase apps:sdkconfig IOS 1:463327817067:ios:6a85ef20ff5f9860b2b02e \
    ```
    Or via the Firebase console → App Distribution → Testers & Groups.
 
+**Smoke test the SA locally** before dispatching CI:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/tmp/fad-sa.json  # paste FIREBASE_SERVICE_ACCOUNT_KEY
+firebase appdistribution:groups:list --project breez-technology
+```
+
+Should print at least `internal`. A 403 means the IAM grant from
+step 2 hasn't landed — both `*-preview` jobs will surface the
+same error when fastlane tries to upload.
+
+### iOS preview signing — Apple Developer portal (one-time + ongoing)
+
+`ios-preview` signs with an **Ad Hoc** provisioning profile
+covering bundle ID `technology.breez.glow.dev` + every registered
+tester UDID. The profile is held base64-encoded in
+`IOS_PREVIEW_PROFILE_BASE64`. Do not use a Development or App
+Store profile here — xcodebuild will fail with "not an 'iOS Ad
+Hoc' profile" at the export step.
+
+**One-time bootstrap** (first run after setting up FAD):
+
+1. Grab your own UDID — one device is enough. Via Finder
+   (connect → click device in sidebar → click text under model
+   name to cycle to UDID → copy) or `idevice_id -l` with
+   `libimobiledevice` installed.
+2. Apple Developer portal → Devices → `+`, register under team
+   `F7R2LZH3W5`.
+3. Portal → Profiles → `+` → **Ad Hoc** (Distribution → Ad Hoc).
+   App ID `technology.breez.glow.dev`, certificate = existing
+   Apple Distribution cert (same bytes as
+   `IOS_PREVIEW_CERT_P12_BASE64`), devices = all currently
+   registered. Name it `Glow Dev Ad Hoc`. Download.
+4. Rotate the secret:
+   ```bash
+   base64 -i "Glow_Dev_Ad_Hoc.mobileprovision" | \
+     gh secret set IOS_PREVIEW_PROFILE_BASE64 --body -
+   ```
+   Cert + keychain secrets don't change.
+
+**Ongoing new-tester loop**:
+
+1. Invite by email (Firebase console or `firebase
+   appdistribution:testers:add`). They click the invite on their
+   iOS device → install the Firebase tester profile → Firebase
+   auto-collects their UDID.
+2. Firebase console → App Distribution → Testers & Groups → All
+   testers → **Export Apple UDIDs** → download CSV.
+3. Apple Developer portal → Devices → **Register Multiple
+   Devices** → upload the CSV. (Or automate via fastlane's
+   `register_devices` action against the same CSV.)
+4. Portal → Profiles → edit `Glow Dev Ad Hoc` → tick new devices
+   → regenerate → download.
+5. Rotate `IOS_PREVIEW_PROFILE_BASE64` as in bootstrap step 4.
+6. Re-dispatch or retag a preview build.
+
+Apple Distribution cert expires 2026-12-23 — a cert rotation
+forces a profile regeneration too. See "Certificate rotation"
+below.
+
 ### Required repository secrets
 
 Set via `gh secret set <NAME>` or the Settings → Secrets UI.
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
-| `VITE_BREEZ_API_KEY` | android, ios, ios-preview | Required. Breez SDK API key baked into the glow-web bundle at build time. Without it the SDK fails to init and mnemonic-based onboarding can't reach the wallet. Mirror the value from `glow-web/.env`. |
-| `GRADLE_ENCRYPTION_KEY` | android | Optional. Encrypts the Gradle configuration cache shared across runs. Falls back to unencrypted cache if unset. |
+| `VITE_BREEZ_API_KEY` | android, ios, ios-preview, android-preview | Required. Breez SDK API key baked into the glow-web bundle at build time. Without it the SDK fails to init and mnemonic-based onboarding can't reach the wallet. Mirror the value from `glow-web/.env`. |
+| `GRADLE_ENCRYPTION_KEY` | android, android-preview | Optional. Encrypts the Gradle configuration cache shared across runs. Falls back to unencrypted cache if unset. |
 | `FIREBASE_IOS_APP_ID_PREVIEW` | ios-preview | Firebase App Distribution iOS app id (`1:NNNN:ios:HASH`). |
-| `FIREBASE_SERVICE_ACCOUNT_KEY` | ios-preview | Firebase service-account JSON (raw, not base64). |
+| `FIREBASE_ANDROID_APP_ID_PREVIEW` | android-preview | Firebase App Distribution Android app id (`1:NNNN:android:HASH`). |
+| `FIREBASE_SERVICE_ACCOUNT_KEY` | ios-preview, android-preview | Firebase service-account JSON (raw, not base64). The SA MUST hold `roles/firebaseappdistro.admin` on the `breez-technology` project — fastlane surfaces a 403 otherwise. |
 | `IOS_PREVIEW_KEYCHAIN_PASSWORD` | ios-preview | Arbitrary string; unlocks the temp keychain on the CI runner. |
-| `IOS_PREVIEW_CERT_P12_BASE64` | ios-preview | Ad-hoc distribution cert (`.p12`) base64-encoded. `base64 -i cert.p12 \| pbcopy` on macOS. |
+| `IOS_PREVIEW_CERT_P12_BASE64` | ios-preview | Apple Distribution cert (`.p12`) base64-encoded. `base64 -i cert.p12 \| pbcopy` on macOS. Same bytes as `IOS_RELEASE_CERT_P12_BASE64`. |
 | `IOS_PREVIEW_CERT_P12_PASSWORD` | ios-preview | `.p12` export passphrase (set when exporting from Keychain). |
-| `IOS_PREVIEW_PROFILE_BASE64` | ios-preview | Ad-hoc provisioning profile (`.mobileprovision`) base64-encoded. |
+| `IOS_PREVIEW_PROFILE_BASE64` | ios-preview | **Ad Hoc** provisioning profile (`.mobileprovision`) base64-encoded, covering bundle ID `technology.breez.glow.dev`. Must NOT be a Development or App Store profile. See "iOS preview signing — Apple Developer portal" above for the one-time + ongoing profile-regeneration loop. |
 
 ### Android debug signing
 

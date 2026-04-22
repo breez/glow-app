@@ -77,10 +77,35 @@ PROFILE_NAME="$(echo "$PROFILE_PLIST" | plutil -extract Name xml1 -o - - | sed -
 TEAM_ID="$(echo "$PROFILE_PLIST" | plutil -extract TeamIdentifier.0 xml1 -o - - | sed -n 's/.*<string>\(.*\)<\/string>.*/\1/p')"
 cp "$PROFILE_PATH" "$PROFILES_DIR/$UUID.mobileprovision"
 
+# Informational: derive profile type + device count from the plist so
+# the build log makes it obvious which flavour of profile got used.
+# Apple's truth table:
+#   ProvisionsAllDevices=true                         → Enterprise
+#   ProvisionedDevices absent, get-task-allow=false   → App Store
+#   ProvisionedDevices present, get-task-allow=true   → Development
+#   ProvisionedDevices present, get-task-allow=false  → Ad Hoc
+PROVISIONS_ALL_DEVICES="$(echo "$PROFILE_PLIST" | plutil -extract ProvisionsAllDevices raw -o - - 2>/dev/null || echo "false")"
+GET_TASK_ALLOW="$(echo "$PROFILE_PLIST" | plutil -extract Entitlements.get-task-allow raw -o - - 2>/dev/null || echo "false")"
+DEVICES_XML="$(echo "$PROFILE_PLIST" | plutil -extract ProvisionedDevices xml1 -o - - 2>/dev/null || true)"
+DEVICE_COUNT="$(printf '%s\n' "$DEVICES_XML" | awk '/<string>/ {c++} END {print c+0}')"
+
+if [[ "$PROVISIONS_ALL_DEVICES" == "true" ]]; then
+  PROFILE_TYPE="Enterprise"
+elif (( DEVICE_COUNT == 0 )) && [[ "$GET_TASK_ALLOW" == "false" ]]; then
+  PROFILE_TYPE="App Store"
+elif (( DEVICE_COUNT > 0 )) && [[ "$GET_TASK_ALLOW" == "true" ]]; then
+  PROFILE_TYPE="Development"
+elif (( DEVICE_COUNT > 0 )) && [[ "$GET_TASK_ALLOW" == "false" ]]; then
+  PROFILE_TYPE="Ad Hoc"
+else
+  PROFILE_TYPE="Unknown"
+fi
+
 echo "==> iOS signing artifacts installed"
 echo "    Keychain:       $KEYCHAIN_PATH"
 echo "    Profile UUID:   $UUID"
 echo "    Profile Name:   $PROFILE_NAME"
+echo "    Profile Type:   $PROFILE_TYPE (devices: $DEVICE_COUNT)"
 echo "    Team ID:        $TEAM_ID"
 
 # Emit GitHub Actions outputs if running in a GHA step.

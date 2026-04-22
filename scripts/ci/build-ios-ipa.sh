@@ -8,32 +8,40 @@
 #
 # Arguments:
 #   $1  configuration — Debug | Release (default: Debug)
-#   $2  export method — ad-hoc | app-store-connect (default: ad-hoc)
+#   $2  export method — release-testing | app-store-connect (default: release-testing)
 #
 # Export method maps to downstream distribution:
-#   ad-hoc              → Firebase App Distribution (ios-preview job)
+#   release-testing     → Firebase App Distribution (ios-preview job)
 #   app-store-connect   → TestFlight (ios-release job)
 # The installed provisioning profile MUST match the chosen method
-# (ad-hoc profile for ad-hoc export, App-Store-distribution profile
-# for app-store-connect export) or xcodebuild fails to find a
+# (Ad Hoc profile for release-testing export, App-Store-distribution
+# profile for app-store-connect export) or xcodebuild fails to find a
 # usable profile.
 #
-# `app-store` is a deprecated alias kept for backward compat; Apple
-# renamed it to `app-store-connect` in Xcode 26.x and emits a
-# deprecation warning. We silently remap to the new name.
+# Apple renamed the underlying profile type / export method names in
+# Xcode 15.3–26.x. Both old names are accepted as deprecated aliases
+# and silently remapped:
+#   ad-hoc     → release-testing
+#   app-store  → app-store-connect
+# The generated exportOptions.plist always writes the modern name so
+# Xcode 26 doesn't emit deprecation warnings.
 
 set -euo pipefail
 
 CONFIGURATION="${1:-Debug}"
-METHOD="${2:-ad-hoc}"
+METHOD="${2:-release-testing}"
 
 case "$METHOD" in
-  ad-hoc|app-store-connect) ;;
+  release-testing|app-store-connect) ;;
+  ad-hoc)
+    echo "warning: method 'ad-hoc' is deprecated; auto-mapping to 'release-testing' (Xcode 15.3+)" >&2
+    METHOD="release-testing"
+    ;;
   app-store)
     echo "warning: method 'app-store' is deprecated; auto-mapping to 'app-store-connect' (Xcode 26+)" >&2
     METHOD="app-store-connect"
     ;;
-  *) echo "error: unsupported method '$METHOD' (expected ad-hoc | app-store-connect)" >&2; exit 2 ;;
+  *) echo "error: unsupported method '$METHOD' (expected release-testing | app-store-connect)" >&2; exit 2 ;;
 esac
 
 BUILD_DIR="build"

@@ -1,12 +1,22 @@
 source "https://rubygems.org"
 
-# Fastlane drives the TestFlight upload pipeline (Phase 4C).
-# `match` decrypts the distribution cert + app-store provisioning
-# profile from the breez/glow-app-match repo; `build_app` archives
-# + exports an .ipa; `upload_to_testflight` ships it via the App
-# Store Connect API key (.p8) provided as env vars in CI.
+# Fastlane drives BOTH iOS distribution pipelines:
+#   - ios-release (Phase 4C) → upload_to_testflight (fastlane core,
+#     no plugin needed).
+#   - ios-preview (Phase 4D / this PR) → firebase_app_distribution
+#     plugin declared in fastlane/Pluginfile below.
+#
+# Signing + archiving still happen via scripts/ci/import-ios-cert.sh +
+# scripts/ci/build-ios-ipa.sh; fastlane is used ONLY for the upload
+# step on both lanes.
 #
 # CI uses `bundler-cache: true` on actions/setup-ruby so the
 # Gemfile.lock + ~/.gem cache are restored between runs and we
 # don't pay the ~30s gem-install cost every build.
 gem "fastlane"
+
+# Pull in plugin declarations. `fastlane add_plugin` writes this
+# `eval_gemfile` line automatically; committing both files keeps the
+# plugin graph reproducible across CI + local devs.
+plugins_path = File.join(File.dirname(__FILE__), "fastlane", "Pluginfile")
+eval_gemfile(plugins_path) if File.exist?(plugins_path)
