@@ -45,6 +45,22 @@ echo "==> Decoding cert + profile"
 printf '%s' "$P12_BASE64" | tr -d '[:space:]' | base64 --decode --output "$CERT_PATH"
 printf '%s' "$PROVISIONING_PROFILE_BASE64" | tr -d '[:space:]' | base64 --decode --output "$PROFILE_PATH"
 
+# Sanity-check the decoded profile is actually a CMS-signed
+# .mobileprovision (ASN.1 SEQUENCE, first byte 0x30). If the
+# secret was corrupted at upload (e.g. `gh secret set --body -`
+# truncating a large payload), `security cms -D -i` would error
+# later with a cryptic `-8183(d) / problem decoding`. Catch it
+# here with a clear message that names the offending secret.
+first_byte=$(xxd -p -l 1 "$PROFILE_PATH" 2>/dev/null || echo "")
+if [[ "$first_byte" != "30" ]]; then
+  echo "ERROR: decoded PROVISIONING_PROFILE_BASE64 is not a valid CMS .mobileprovision file." >&2
+  echo "       First byte is 0x${first_byte:-??}; expected 0x30 (ASN.1 SEQUENCE)." >&2
+  echo "       Likely cause: the IOS_PREVIEW_PROFILE_BASE64 (or IOS_RELEASE_PROFILE_BASE64)" >&2
+  echo "       GitHub secret was truncated/corrupted at upload. Re-upload with:" >&2
+  echo "         base64 -i Glow_Dev_Ad_Hoc.mobileprovision | gh secret set <NAME> --repo breez/glow-app" >&2
+  exit 1
+fi
+
 echo "==> Creating temp keychain"
 security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"  # 6h lock timeout
