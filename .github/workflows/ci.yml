@@ -290,7 +290,7 @@ jobs:
       - name: Unit tests
         run: cd glow-web && npm run test
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: web-test-results
@@ -327,7 +327,7 @@ jobs:
           java-version: '21'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@v6
         with:
           # Falls back to an unencrypted shared cache when the secret is unset.
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
@@ -354,13 +354,13 @@ jobs:
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: glow-${{ github.sha }}-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: android-build-logs
@@ -439,7 +439,7 @@ jobs:
             build | tee xcodebuild.log
 
       - name: Upload xcodebuild log on failure
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-build-log
@@ -546,7 +546,7 @@ jobs:
           bundle exec fastlane upload_firebase
 
       - name: Upload archive on failure
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-preview-archive
@@ -584,7 +584,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
@@ -633,7 +633,7 @@ jobs:
           export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
           bundle exec fastlane upload_firebase
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: android-preview-build-logs
@@ -674,7 +674,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v5
+      - uses: gradle/actions/setup-gradle@v6
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
@@ -745,7 +745,7 @@ jobs:
           cd android && ./gradlew :app:bundleRelease :app:publishReleaseBundle --no-daemon
 
       - name: Upload AAB artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           # VERSION_NAME (populated by compute-version.sh) is always slash-
           # free — unlike github.ref_name, which on dispatch-from-branch runs
@@ -754,7 +754,7 @@ jobs:
           path: android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: android-release-build-logs
@@ -876,7 +876,7 @@ jobs:
         run: bundle exec fastlane upload
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           # See android-release AAB comment above — VERSION_NAME is
           # slash-safe on dispatch-from-branch runs.
@@ -884,7 +884,7 @@ jobs:
           path: build/App.ipa
           retention-days: 30
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ios-release-archive
