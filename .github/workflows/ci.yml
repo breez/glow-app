@@ -108,7 +108,7 @@ jobs:
             warn "dry_run=true ignored — only distribution=store has an upload step to skip"
           fi
 
-          echo "::notice::validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
+          echo "validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
 
   # Linux-side probe of the macOS SDK artifact cache. Saves ~2–3 macOS min ×
   # 10× billing on warm-cache iOS runs by confirming cache existence before
@@ -160,9 +160,9 @@ jobs:
           hit="${{ steps.probe.outputs.cache-hit }}"
           echo "ios-cache-hit=${hit:-}" >> "$GITHUB_OUTPUT"
           if [[ "$hit" == "true" ]]; then
-            echo "::notice::macOS SDK cache HIT for sha=${{ steps.sdk-sha.outputs.sha }} — skipping warm-sdk-macos"
+            echo "macOS SDK cache HIT for sha=${{ steps.sdk-sha.outputs.sha }} — skipping warm-sdk-macos"
           else
-            echo "::notice::macOS SDK cache MISS or error (hit='${hit:-}') for sha=${{ steps.sdk-sha.outputs.sha }} — warm-sdk-macos will run"
+            echo "macOS SDK cache MISS or error (hit='${hit:-}') for sha=${{ steps.sdk-sha.outputs.sha }} — warm-sdk-macos will run"
           fi
 
   # SDK "warmer" jobs build spark-sdk from source once per pinned SHA per OS
@@ -296,6 +296,7 @@ jobs:
           name: web-test-results
           path: glow-web/coverage/**/*.json
           retention-days: 7
+          if-no-files-found: ignore
 
   # Android unsigned compile-check. Dispatch-only; release-* tags fall
   # through to android-release (signed AAB). Symmetric with `ios`.
@@ -367,6 +368,7 @@ jobs:
             android/app/build/reports/**/*
             android/build/reports/**/*
           retention-days: 7
+          if-no-files-found: ignore
 
   ios:
     name: iOS (xcodebuild, unsigned)
@@ -443,6 +445,7 @@ jobs:
           name: ios-build-log
           path: xcodebuild.log
           retention-days: 7
+          if-no-files-found: ignore
 
   ios-preview:
     name: iOS preview (Firebase App Distribution)
@@ -549,6 +552,7 @@ jobs:
           name: ios-preview-archive
           path: build/App.xcarchive
           retention-days: 7
+          if-no-files-found: ignore
 
   android-preview:
     name: Android preview (Firebase App Distribution)
@@ -637,6 +641,7 @@ jobs:
             android/app/build/reports/**/*
             android/build/reports/**/*
           retention-days: 7
+          if-no-files-found: ignore
 
   android-release:
     name: Android release (Play Internal)
@@ -742,7 +747,10 @@ jobs:
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v5
         with:
-          name: glow-${{ github.ref_name }}-aab
+          # VERSION_NAME (populated by compute-version.sh) is always slash-
+          # free — unlike github.ref_name, which on dispatch-from-branch runs
+          # is the branch name and can contain `/`.
+          name: glow-${{ env.VERSION_NAME }}-aab
           path: android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
@@ -754,6 +762,9 @@ jobs:
             android/app/build/reports/**/*
             android/build/reports/**/*
           retention-days: 7
+          # Compute-version hard-fail path never produces reports — skip
+          # the "No files were found" warning in that case.
+          if-no-files-found: ignore
 
   ios-release:
     name: iOS release (TestFlight)
@@ -867,7 +878,9 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v5
         with:
-          name: glow-${{ github.ref_name }}-ipa
+          # See android-release AAB comment above — VERSION_NAME is
+          # slash-safe on dispatch-from-branch runs.
+          name: glow-${{ env.VERSION_NAME }}-ipa
           path: build/App.ipa
           retention-days: 30
 
@@ -877,6 +890,9 @@ jobs:
           name: ios-release-archive
           path: build/App.xcarchive
           retention-days: 7
+          # See android-release equivalent — silences the "No files
+          # were found" warning when the failure is pre-archive.
+          if-no-files-found: ignore
 
   # Publishes a GitHub Release with AAB + IPA artifacts. ONLY fires on
   # release-* tag push — target=both distribution=store dispatches build
@@ -906,8 +922,9 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           path: artifacts
-          # Names: glow-<tag>-aab + glow-<tag>-ipa from the two upstream jobs.
-          pattern: glow-${{ github.ref_name }}-*
+          # Matches glow-<version>-aab + glow-<version>-ipa from the two
+          # upstream jobs (names use env.VERSION_NAME = X.Y.Z, not the tag).
+          pattern: glow-*
           merge-multiple: true
 
       - name: Compose release notes

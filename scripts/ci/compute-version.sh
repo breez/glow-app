@@ -81,10 +81,10 @@ fi
 validate_release_match() {
   local tag_version="$1"
   if [[ "$tag_version" != "$BASIS_VERSION" ]]; then
-    echo "::error::compute-version.sh: release tag version '$tag_version' does not match" >&2
-    echo "::error::package.json version '$BASIS_VERSION'. The in-repo basis version is the" >&2
-    echo "::error::source of truth — bump package.json to '$tag_version' in the same commit" >&2
-    echo "::error::the release-$tag_version tag points at, then re-push." >&2
+    # %0A = literal newline inside a single GitHub Actions annotation —
+    # keeps basis-drift as ONE error block instead of 4 separate entries
+    # in the run summary.
+    echo "::error title=Basis-version drift::release tag version '$tag_version' does not match package.json version '$BASIS_VERSION'.%0AThe in-repo basis version is the source of truth — bump package.json to '$tag_version' in the same commit the release-$tag_version tag points at, then re-push." >&2
     exit 1
   fi
 }
