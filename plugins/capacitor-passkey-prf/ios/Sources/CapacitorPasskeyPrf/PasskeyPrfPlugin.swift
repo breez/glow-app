@@ -43,9 +43,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
                     let credentialId = try await provider.createPasskey(
                         excludeCredentialIds: excludeIds
                     )
-                    let ret = JSObject()
-                    ret["credentialId"] = credentialId.base64EncodedString()
-                    call.resolve(ret)
+                    call.resolve(["credentialId": credentialId.base64EncodedString()])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
