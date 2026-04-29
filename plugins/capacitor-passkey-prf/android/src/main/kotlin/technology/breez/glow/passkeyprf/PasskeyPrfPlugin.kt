@@ -36,10 +36,18 @@ class PasskeyPrfPlugin : Plugin() {
     @PluginMethod
     fun createPasskey(call: PluginCall) {
         val provider = makeProvider(call)
+
+        val excludeCredentialIds = call.getArray("excludeCredentialIds")
+            ?.toList<String>()
+            ?.map { Base64.decode(it, Base64.NO_WRAP) }
+            ?: emptyList()
+
         scope.launch {
             try {
-                provider.createPasskey()
-                call.resolve()
+                val credentialId = provider.createPasskey(excludeCredentialIds)
+                val ret = com.getcapacitor.JSObject()
+                ret.put("credentialId", Base64.encodeToString(credentialId, Base64.NO_WRAP))
+                call.resolve(ret)
             } catch (e: Exception) {
                 call.reject(e.message ?: "Passkey creation failed", errorCode(e))
             }
@@ -115,6 +123,7 @@ class PasskeyPrfPlugin : Plugin() {
             rpName = call.getString("rpName") ?: "Glow",
             userName = call.getString("userName"),
             userDisplayName = call.getString("userDisplayName"),
+            autoRegister = call.getBoolean("autoRegister") ?: true,
         )
     }
 
@@ -124,6 +133,7 @@ class PasskeyPrfPlugin : Plugin() {
         is PasskeyPrfException.CredentialNotFound -> "CREDENTIAL_NOT_FOUND"
         is PasskeyPrfException.AuthenticationFailed -> "AUTHENTICATION_FAILED"
         is PasskeyPrfException.PrfEvaluationFailed -> "PRF_EVALUATION_FAILED"
+        is PasskeyPrfException.ConfigurationError -> "CONFIGURATION_ERROR"
         is PasskeyPrfException.Generic -> "GENERIC_ERROR"
         else -> "UNKNOWN_ERROR"
     }

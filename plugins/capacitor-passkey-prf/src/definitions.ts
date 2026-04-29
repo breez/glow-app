@@ -31,24 +31,28 @@ export interface PasskeyPrfPlugin {
   /**
    * Register a new passkey with PRF support.
    * Triggers exactly one biometric/passkey prompt.
+   *
+   * @returns The credential ID of the newly created passkey (base64-encoded).
    */
   createPasskey(options: {
     rpId?: string;
     rpName?: string;
     userName?: string;
     userDisplayName?: string;
-  }): Promise<void>;
+    excludeCredentialIds?: string[];
+  }): Promise<{ credentialId: string }>;
 
   /**
    * Derive a 32-byte seed from passkey PRF with the given salt.
-   * If no credential exists, auto-registers one first.
-   * Triggers one or two biometric/passkey prompts.
+   * If autoRegister is true (default) and no credential exists,
+   * auto-registers one first. Triggers one or two biometric/passkey prompts.
    *
    * @returns Base64-encoded 32-byte seed.
    */
   derivePrfSeed(options: {
     rpId?: string;
     salt: string;
+    autoRegister?: boolean;
   }): Promise<{ seed: string }>;
 
   /**

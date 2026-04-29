@@ -32,10 +32,20 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
     @objc func createPasskey(_ call: CAPPluginCall) {
         if #available(iOS 18.0, *) {
             let provider = makeProvider(call)
+
+            var excludeIds: [Data] = []
+            if let base64Array = call.getArray("excludeCredentialIds", String.self) {
+                excludeIds = base64Array.compactMap { Data(base64Encoded: $0) }
+            }
+
             Task {
                 do {
-                    try await provider.createPasskey()
-                    call.resolve()
+                    let credentialId = try await provider.createPasskey(
+                        excludeCredentialIds: excludeIds
+                    )
+                    let ret = JSObject()
+                    ret["credentialId"] = credentialId.base64EncodedString()
+                    call.resolve(ret)
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
@@ -122,7 +132,8 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
             rpId: call.getString("rpId") ?? "keys.breez.technology",
             rpName: call.getString("rpName") ?? "Glow",
             userName: call.getString("userName"),
-            userDisplayName: call.getString("userDisplayName")
+            userDisplayName: call.getString("userDisplayName"),
+            autoRegister: call.getBool("autoRegister") ?? true
         )
     }
 
@@ -134,6 +145,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         case .CredentialNotFound: return "CREDENTIAL_NOT_FOUND"
         case .AuthenticationFailed: return "AUTHENTICATION_FAILED"
         case .PrfEvaluationFailed: return "PRF_EVALUATION_FAILED"
+        case .ConfigurationError: return "CONFIGURATION_ERROR"
         case .Generic: return "GENERIC_ERROR"
         }
     }
