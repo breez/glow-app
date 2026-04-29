@@ -9,7 +9,7 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import technology.breez.spark.passkey.CredentialManagerPrfProvider
+import technology.breez.spark.passkey.PasskeyProvider
 import breez_sdk_spark.DomainAssociation
 import breez_sdk_spark.PasskeyPrfException
 
@@ -108,8 +108,8 @@ class PasskeyPrfPlugin : Plugin() {
         return ret
     }
 
-    private fun makeProvider(call: PluginCall): CredentialManagerPrfProvider {
-        return CredentialManagerPrfProvider(
+    private fun makeProvider(call: PluginCall): PasskeyProvider {
+        return PasskeyProvider(
             activityProvider = { activity as Activity },
             rpId = call.getString("rpId") ?: "keys.breez.technology",
             rpName = call.getString("rpName") ?: "Glow",

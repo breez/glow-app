@@ -117,8 +117,8 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @available(iOS 18.0, *)
-    private func makeProvider(_ call: CAPPluginCall) -> PlatformPasskeyPrfProvider {
-        PlatformPasskeyPrfProvider(
+    private func makeProvider(_ call: CAPPluginCall) -> PasskeyProvider {
+        PasskeyProvider(
             rpId: call.getString("rpId") ?? "keys.breez.technology",
             rpName: call.getString("rpName") ?? "Glow",
             userName: call.getString("userName"),
