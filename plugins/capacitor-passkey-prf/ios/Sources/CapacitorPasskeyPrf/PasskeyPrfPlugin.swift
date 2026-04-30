@@ -10,6 +10,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isPrfAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "createPasskey", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "derivePrfSeed", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "derivePrfSeeds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkDomainAssociation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getKnownCredentialIds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearKnownCredentialIds", returnType: CAPPluginReturnPromise),
@@ -106,6 +107,28 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
                 do {
                     let seedData = try await provider.derivePrfSeed(salt: salt)
                     call.resolve(["seed": seedData.base64EncodedString()])
+                } catch {
+                    call.reject(error.localizedDescription, errorCode(error))
+                }
+            }
+        } else {
+            call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+        }
+    }
+
+    @objc func derivePrfSeeds(_ call: CAPPluginCall) {
+        guard let salts = call.getArray("salts", String.self), !salts.isEmpty else {
+            call.reject("Missing or empty required parameter: salts", "INVALID_ARGUMENT")
+            return
+        }
+
+        if #available(iOS 18.0, *) {
+            let provider = makeProvider(call)
+            Task {
+                do {
+                    let outputs = try await provider.derivePrfSeeds(salts: salts)
+                    let base64 = outputs.map { $0.base64EncodedString() }
+                    call.resolve(["seeds": base64])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }

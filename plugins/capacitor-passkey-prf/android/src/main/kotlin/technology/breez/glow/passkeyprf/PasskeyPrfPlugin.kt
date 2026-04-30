@@ -144,6 +144,52 @@ class PasskeyPrfPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun derivePrfSeeds(call: PluginCall) {
+        val saltsArr = call.getArray("salts")
+        if (saltsArr == null || saltsArr.length() == 0) {
+            call.reject("Missing or empty required parameter: salts", "INVALID_ARGUMENT")
+            return
+        }
+        val salts: List<String> = saltsArr.toList<String>()
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+
+        scope.launch {
+            try {
+                val allowedBytes = KnownCredentialsStore.read(context, rpId).mapNotNull { id ->
+                    try {
+                        Base64.decode(id, Base64.NO_WRAP)
+                    } catch (_: IllegalArgumentException) {
+                        null
+                    }
+                }
+
+                val provider = makeProvider(call, rpId, allowCredentialIds = allowedBytes)
+                provider.onAssertionCredentialId = { credentialId ->
+                    val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+                    scope.launch {
+                        try {
+                            KnownCredentialsStore.add(context, base64, rpId)
+                        } catch (e: Exception) {
+                            // swallow
+                        }
+                    }
+                }
+
+                val seedBytesList = provider.derivePrfSeeds(salts)
+                val seedsBase64 = JSArray()
+                for (bytes in seedBytesList) {
+                    seedsBase64.put(Base64.encodeToString(bytes, Base64.NO_WRAP))
+                }
+                val ret = JSObject()
+                ret.put("seeds", seedsBase64)
+                call.resolve(ret)
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Bulk PRF seed derivation failed", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
     fun getKnownCredentialIds(call: PluginCall) {
         val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
         scope.launch {
