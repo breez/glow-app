@@ -2,6 +2,8 @@ package technology.breez.glow.passkeyprf
 
 import android.app.Activity
 import android.util.Base64
+import com.getcapacitor.JSArray
+import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
@@ -20,11 +22,12 @@ class PasskeyPrfPlugin : Plugin() {
 
     @PluginMethod
     fun isPrfAvailable(call: PluginCall) {
-        val provider = makeProvider(call)
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
         scope.launch {
             try {
+                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
                 val available = provider.isPrfAvailable()
-                val ret = com.getcapacitor.JSObject()
+                val ret = JSObject()
                 ret.put("available", available)
                 call.resolve(ret)
             } catch (e: Exception) {
@@ -35,18 +38,46 @@ class PasskeyPrfPlugin : Plugin() {
 
     @PluginMethod
     fun createPasskey(call: PluginCall) {
-        val provider = makeProvider(call)
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
 
-        val excludeCredentialIds = call.getArray("excludeCredentialIds")
+        // Build excludeCredentials by merging two sources, mirroring iOS:
+        //   1. Caller-provided base64 IDs (legacy localStorage list).
+        //   2. The plugin-owned, Block-Store-synced registry. Survives
+        //      app uninstall + device transfer via the Google account.
+        // The platform refuses registration if any listed credential is
+        // currently registered on the device, regardless of source.
+        val callerExcludeIds = call.getArray("excludeCredentialIds")
             ?.toList<String>()
-            ?.map { Base64.decode(it, Base64.NO_WRAP) }
             ?: emptyList()
 
         scope.launch {
             try {
-                val credentialId = provider.createPasskey(excludeCredentialIds)
-                val ret = com.getcapacitor.JSObject()
-                ret.put("credentialId", Base64.encodeToString(credentialId, Base64.NO_WRAP))
+                val storeIds = KnownCredentialsStore.read(context, rpId)
+                val seen = LinkedHashSet<String>()
+                val merged = ArrayList<String>()
+                for (id in callerExcludeIds) if (seen.add(id)) merged.add(id)
+                for (id in storeIds) if (seen.add(id)) merged.add(id)
+                val excludeBytes = merged.mapNotNull { id ->
+                    try {
+                        Base64.decode(id, Base64.NO_WRAP)
+                    } catch (_: IllegalArgumentException) {
+                        null
+                    }
+                }
+
+                // Use a provider with empty allowCredentialIds for create —
+                // we only constrain on the assertion side.
+                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
+                val credentialId = provider.createPasskey(excludeBytes)
+                val credentialIdBase64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+
+                // Persist into the registry so future createPasskey calls
+                // (including post-uninstall, post-device-transfer) see this
+                // ID in their excludeCredentials list.
+                KnownCredentialsStore.add(context, credentialIdBase64, rpId)
+
+                val ret = JSObject()
+                ret.put("credentialId", credentialIdBase64)
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject(e.message ?: "Passkey creation failed", errorCode(e))
@@ -61,12 +92,49 @@ class PasskeyPrfPlugin : Plugin() {
             call.reject("Missing required parameter: salt", "INVALID_ARGUMENT")
             return
         }
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
 
-        val provider = makeProvider(call)
         scope.launch {
             try {
+                // Constrain assertion to credential IDs we've registered
+                // for this RP (read from the synced registry). Guarantees
+                // deterministic seed derivation: the platform only signs
+                // with one of our tracked credentials, never picking a
+                // sibling that happens to share the RP and produce a
+                // different PRF output.
+                val allowedBytes = KnownCredentialsStore.read(context, rpId).mapNotNull { id ->
+                    try {
+                        Base64.decode(id, Base64.NO_WRAP)
+                    } catch (_: IllegalArgumentException) {
+                        null
+                    }
+                }
+
+                val provider = makeProvider(call, rpId, allowCredentialIds = allowedBytes)
+
+                // Capture-on-sign-in: every successful assertion writes
+                // the asserted credential ID back into the registry, so
+                // pre-tracking installs (e.g. users from older Glow
+                // versions that didn't write the registry) auto-migrate
+                // after their first sign-in here. After that, future
+                // create attempts hit the platform-level "already exists"
+                // refusal correctly.
+                provider.onAssertionCredentialId = { credentialId ->
+                    val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+                    // Fire-and-forget: best-effort. Failures here must
+                    // not block the seed return because the assertion
+                    // already succeeded.
+                    scope.launch {
+                        try {
+                            KnownCredentialsStore.add(context, base64, rpId)
+                        } catch (e: Exception) {
+                            // swallow
+                        }
+                    }
+                }
+
                 val seedBytes = provider.derivePrfSeed(salt)
-                val ret = com.getcapacitor.JSObject()
+                val ret = JSObject()
                 ret.put("seed", Base64.encodeToString(seedBytes, Base64.NO_WRAP))
                 call.resolve(ret)
             } catch (e: Exception) {
@@ -76,10 +144,41 @@ class PasskeyPrfPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun checkDomainAssociation(call: PluginCall) {
-        val provider = makeProvider(call)
+    fun getKnownCredentialIds(call: PluginCall) {
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
         scope.launch {
             try {
+                val ids = KnownCredentialsStore.read(context, rpId)
+                val ret = JSObject()
+                val arr = JSArray()
+                for (id in ids) arr.put(id)
+                ret.put("credentialIds", arr)
+                call.resolve(ret)
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Failed to read known credentials", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun clearKnownCredentialIds(call: PluginCall) {
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+        scope.launch {
+            try {
+                KnownCredentialsStore.clear(context, rpId)
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Failed to clear known credentials", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun checkDomainAssociation(call: PluginCall) {
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+        scope.launch {
+            try {
+                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
                 val result = provider.checkDomainAssociation()
                 call.resolve(domainAssociationToJson(result))
             } catch (e: Exception) {
@@ -97,8 +196,8 @@ class PasskeyPrfPlugin : Plugin() {
      * `DomainAssociation` type one-to-one so callers on both platforms
      * see the same payload.
      */
-    private fun domainAssociationToJson(result: DomainAssociation): com.getcapacitor.JSObject {
-        val ret = com.getcapacitor.JSObject()
+    private fun domainAssociationToJson(result: DomainAssociation): JSObject {
+        val ret = JSObject()
         when (result) {
             is DomainAssociation.Associated -> {
                 ret.put("kind", "Associated")
@@ -116,14 +215,19 @@ class PasskeyPrfPlugin : Plugin() {
         return ret
     }
 
-    private fun makeProvider(call: PluginCall): PasskeyProvider {
+    private fun makeProvider(
+        call: PluginCall,
+        rpId: String,
+        allowCredentialIds: List<ByteArray>,
+    ): PasskeyProvider {
         return PasskeyProvider(
             activityProvider = { activity as Activity },
-            rpId = call.getString("rpId") ?: "keys.breez.technology",
+            rpId = rpId,
             rpName = call.getString("rpName") ?: "Glow",
             userName = call.getString("userName"),
             userDisplayName = call.getString("userDisplayName"),
             autoRegister = call.getBoolean("autoRegister") ?: true,
+            allowCredentialIds = allowCredentialIds,
         )
     }
 
@@ -134,7 +238,12 @@ class PasskeyPrfPlugin : Plugin() {
         is PasskeyPrfException.AuthenticationFailed -> "AUTHENTICATION_FAILED"
         is PasskeyPrfException.PrfEvaluationFailed -> "PRF_EVALUATION_FAILED"
         is PasskeyPrfException.Configuration -> "CONFIGURATION_ERROR"
+        is PasskeyPrfException.CredentialAlreadyExists -> "CREDENTIAL_ALREADY_EXISTS"
         is PasskeyPrfException.Generic -> "GENERIC_ERROR"
         else -> "UNKNOWN_ERROR"
+    }
+
+    companion object {
+        private const val DEFAULT_RP_ID = "keys.breez.technology"
     }
 }
