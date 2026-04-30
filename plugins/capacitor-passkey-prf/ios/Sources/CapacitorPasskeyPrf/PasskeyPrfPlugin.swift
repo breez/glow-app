@@ -206,6 +206,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         case .AuthenticationFailed: return "AUTHENTICATION_FAILED"
         case .PrfEvaluationFailed: return "PRF_EVALUATION_FAILED"
         case .Configuration: return "CONFIGURATION_ERROR"
+        case .CredentialAlreadyExists: return "CREDENTIAL_ALREADY_EXISTS"
         case .Generic: return "GENERIC_ERROR"
         }
     }
