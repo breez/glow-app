@@ -143,7 +143,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         case .CredentialNotFound: return "CREDENTIAL_NOT_FOUND"
         case .AuthenticationFailed: return "AUTHENTICATION_FAILED"
         case .PrfEvaluationFailed: return "PRF_EVALUATION_FAILED"
-        case .ConfigurationError: return "CONFIGURATION_ERROR"
+        case .Configuration: return "CONFIGURATION_ERROR"
         case .Generic: return "GENERIC_ERROR"
         }
     }

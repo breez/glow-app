@@ -133,7 +133,7 @@ class PasskeyPrfPlugin : Plugin() {
         is PasskeyPrfException.CredentialNotFound -> "CREDENTIAL_NOT_FOUND"
         is PasskeyPrfException.AuthenticationFailed -> "AUTHENTICATION_FAILED"
         is PasskeyPrfException.PrfEvaluationFailed -> "PRF_EVALUATION_FAILED"
-        is PasskeyPrfException.ConfigurationError -> "CONFIGURATION_ERROR"
+        is PasskeyPrfException.Configuration -> "CONFIGURATION_ERROR"
         is PasskeyPrfException.Generic -> "GENERIC_ERROR"
         else -> "UNKNOWN_ERROR"
     }
