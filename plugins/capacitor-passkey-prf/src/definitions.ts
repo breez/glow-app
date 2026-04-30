@@ -77,4 +77,32 @@ export interface PasskeyPrfPlugin {
   checkDomainAssociation(options?: {
     rpId?: string;
   }): Promise<DomainAssociation>;
+
+  /**
+   * Read the persisted list of base64-encoded credential IDs for `rpId`.
+   *
+   * The list is backed by the platform's synced keychain (iCloud Keychain
+   * on iOS, Block Store on Android once implemented) so it survives app
+   * uninstall + reinstall. Used by the app to populate
+   * `excludeCredentialIds` on subsequent createPasskey calls without
+   * relying on localStorage (which is wiped on uninstall).
+   *
+   * Returns an empty array if storage is missing, invalid, or the RP has
+   * never registered a credential on this device.
+   */
+  getKnownCredentialIds(options?: {
+    rpId?: string;
+  }): Promise<{ credentialIds: string[] }>;
+
+  /**
+   * Clear the persisted list of credential IDs for `rpId`.
+   *
+   * Called by the deletion-recovery flow when a sign-in attempt returns
+   * `CREDENTIAL_NOT_FOUND` for a device that has previously registered:
+   * the user has manually deleted the passkey from
+   * Settings → Passwords, so the stale list is no longer meaningful.
+   */
+  clearKnownCredentialIds(options?: {
+    rpId?: string;
+  }): Promise<void>;
 }
