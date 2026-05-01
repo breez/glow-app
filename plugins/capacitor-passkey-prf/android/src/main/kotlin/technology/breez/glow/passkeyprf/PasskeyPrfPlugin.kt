@@ -299,6 +299,6 @@ class PasskeyPrfPlugin : Plugin() {
         private const val DEFAULT_RP_ID = "keys.breez.technology"
 
         /** GPM indexing window after registration on Android <14. */
-        private const val POST_CREATE_GRACE_TOTAL_MS: Long = 1_000L
+        private const val POST_CREATE_GRACE_TOTAL_MS: Long = 600L
     }
 }
