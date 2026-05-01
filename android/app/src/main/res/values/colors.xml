@@ -17,4 +17,10 @@
          tailwind.config.js. Used for the solid surface backgrounds
          behind headers on SlideInPage / PageLayout. -->
     <color name="spark_surface">#151520</color>
+
+    <!-- HomePage / splash canvas color. Mirrors the spark.dark token
+         in tailwind.config.js. Used by AppTheme.NoActionBarLaunch
+         and AppTheme.NoActionBar so the cold-launch system bars
+         match the splash and the first-rendered HomePage. -->
+    <color name="spark_dark">#0f0f18</color>
 </resources>

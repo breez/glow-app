@@ -95,8 +95,8 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 	npx capacitor-assets generate --ios --android \
 		--iconBackgroundColor '#0a0a0f' \
 		--iconBackgroundColorDark '#0a0a0f' \
-		--splashBackgroundColor '#151520' \
-		--splashBackgroundColorDark '#151520'
+		--splashBackgroundColor '#0f0f18' \
+		--splashBackgroundColorDark '#0f0f18'
 
 ios: web sync ## Build iOS app
 	xcodebuild -project ios/App/App.xcodeproj -scheme App \

@@ -13,24 +13,23 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
-        <!-- Match HomePage's spark-surface (#151520) canvas with
+        <!-- Match HomePage's spark-dark (#0f0f18) canvas with
              light-on-dark system bar icons so there is no flash of
              default system chrome while the JS StatusBar plugin is still
-             booting. Navigation bar is themed the same color so the
-             bottom gesture bar / nav controls blend with the
-             bottom-sheet / footer background. -->
-        <item name="android:statusBarColor">@color/spark_surface</item>
+             booting. Other pages push spark-surface (and similar) onto
+             the runtime status-bar stack as they render. -->
+        <item name="android:statusBarColor">@color/spark_dark</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:navigationBarColor">@color/spark_surface</item>
+        <item name="android:navigationBarColor">@color/spark_dark</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <item name="android:background">@drawable/splash</item>
-        <item name="android:statusBarColor">@color/spark_surface</item>
+        <item name="android:statusBarColor">@color/spark_dark</item>
         <item name="android:windowLightStatusBar">false</item>
-        <item name="android:navigationBarColor">@color/spark_surface</item>
+        <item name="android:navigationBarColor">@color/spark_dark</item>
         <item name="android:windowLightNavigationBar">false</item>
     </style>
 </resources>
