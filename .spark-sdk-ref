@@ -10,5 +10,5 @@
 #   adds derive_prf_seeds + Passkey.setup_wallet bulk-PRF path.
 #   Promote / merge alongside the matching glow-app + glow-web
 #   proto/passkey-bulk-prf branches once UX validation is done.
-# Last verified: 2026-04-30
-5a8bd717af00ab50ae204aaf4bf355d3f3508c6d
+# Last verified: 2026-05-01
+6f5b4fc5638c04efce1284279e586701fed45882
