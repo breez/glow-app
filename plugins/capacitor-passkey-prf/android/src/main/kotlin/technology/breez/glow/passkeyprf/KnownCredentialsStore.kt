@@ -13,49 +13,11 @@ import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
 
 /**
- * Cross-device-synced store for the credential IDs of every passkey this
- * device has ever registered against a given RP.
- *
- * Used to populate `excludeCredentialIds` on subsequent passkey-registration
- * requests (so the platform refuses to create a duplicate, even after the
- * app has been uninstalled and reinstalled or the user moves to a new
- * device) and `allowCredentialIds` on assertion requests (so sign-in
- * binds to a known credential and produces a deterministic seed).
- *
- * ## Two-tier storage
- *
- * Mirrors the iOS [iCloud-synced keychain pattern][KnownCredentialsStore.swift]
- * with the closest Android equivalents:
- *
- * 1. **Block Store** (primary) — Google Play Services Auth API.
- *    End-to-end encrypted, backed up to the user's Google account, and
- *    automatically restored on reinstall + device transfer. The
- *    Android-native counterpart of iCloud Keychain for sync semantics.
- *    Requires Google Play Services on the device.
- *
- * 2. **EncryptedSharedPreferences** (local fallback / cache) — Jetpack
- *    Security. Provides at-rest encryption via AndroidKeyStore-backed
- *    AES-GCM. Used when Block Store is unavailable (devices without
- *    Play Services, on-prem testing, etc.) and as a fast local cache so
- *    we don't await the asynchronous Block Store on every plugin call.
- *
- * ## Coherence policy
- *
- * Writes go to BOTH stores so a Block Store outage doesn't drop the
- * credential ID. Reads union the two: any ID known to either side is
- * returned. Clears wipe both. The end result behaves like a single
- * logical set, with cross-device sync coming from the Block Store side
- * for free when available.
- *
- * ## Storage shape
- *
- * - Block Store key: `"breez.glow.knownCredentials." + rpId`
- * - ESP file: `breez.glow.knownCredentials`
- * - ESP key per RP: `"credentials." + rpId`
- *
- * Both store a JSON-encoded array of base64-encoded credential IDs. The
- * encoding is deliberately the same as iOS so a future cross-platform
- * audit / migration tool can reuse format assumptions.
+ * Cross-device-synced store of the credential IDs registered for an RP.
+ * Backs `excludeCredentialIds` on registration and `allowCredentialIds`
+ * on assertion. Block Store is primary (Google-account synced),
+ * EncryptedSharedPreferences is the local fallback. Writes go to both,
+ * reads union them.
  */
 internal object KnownCredentialsStore {
     private const val TAG = "KnownCredentialsStore"
@@ -87,6 +49,26 @@ internal object KnownCredentialsStore {
         val encoded = encodeList(current.toList())
         writeToBlockStore(context, rpId, encoded)
         writeToEsp(context, rpId, encoded)
+    }
+
+    /** Local ESP-only variant of [add]. Pair with [syncBlockStore]. */
+    fun addLocal(context: Context, credentialIdBase64: String, rpId: String) {
+        val current = readFromEsp(context, rpId).toMutableSet()
+        if (!current.add(credentialIdBase64)) return
+        writeToEsp(context, rpId, encodeList(current.toList()))
+    }
+
+    /** Mirror local entries up to Block Store. Idempotent. */
+    suspend fun syncBlockStore(context: Context, rpId: String) {
+        val local = readFromEsp(context, rpId)
+        if (local.isEmpty()) return
+        val cloud = readFromBlockStore(context, rpId) ?: emptyList()
+        val merged = LinkedHashSet<String>().apply {
+            addAll(cloud)
+            addAll(local)
+        }
+        if (merged.size == cloud.size) return
+        writeToBlockStore(context, rpId, encodeList(merged.toList()))
     }
 
     /**
