@@ -54,6 +54,16 @@ on:
         description: 'Build + sign but skip the upload step (only meaningful when distribution=store)'
         type: boolean
         default: false
+      notes:
+        # Multiline string for custom release notes on Firebase App
+        # Distribution uploads. When empty, the preview jobs fall back
+        # to scripts/ci/release-notes.sh (auto-generated from git log
+        # since the prior release-* tag). Useful when dispatching a FAD
+        # build from `main` and wanting hand-curated notes that don't
+        # match the auto-generated commit-summary format.
+        description: 'Custom release notes for FAD (multiline; falls back to auto-generated when blank)'
+        type: string
+        default: ''
 
 # Cancel superseded runs on the same PR / branch. Matches the glow-web
 # pattern and saves ~15–25% of minute burn on busy PRs (especially
@@ -523,10 +533,17 @@ jobs:
         run: ./scripts/ci/build-ios-ipa.sh Debug release-testing
 
       - name: Generate release notes
+        env:
+          INPUT_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
-          ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
-          echo "=== release-notes.txt ==="
+          if [[ -n "${INPUT_NOTES:-}" ]]; then
+            printf '%s\n' "$INPUT_NOTES" > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+            echo "=== release-notes.txt (workflow_dispatch input) ==="
+          else
+            ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+            echo "=== release-notes.txt (auto-generated) ==="
+          fi
           cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
 
       - name: Upload to Firebase App Distribution (fastlane)
@@ -612,11 +629,18 @@ jobs:
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Generate release notes
+        env:
+          INPUT_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
           mkdir -p "${GITHUB_WORKSPACE}/build"
-          ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
-          echo "=== release-notes.txt ==="
+          if [[ -n "${INPUT_NOTES:-}" ]]; then
+            printf '%s\n' "$INPUT_NOTES" > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+            echo "=== release-notes.txt (workflow_dispatch input) ==="
+          else
+            ./scripts/ci/release-notes.sh > "${GITHUB_WORKSPACE}/build/release-notes.txt"
+            echo "=== release-notes.txt (auto-generated) ==="
+          fi
           cat "${GITHUB_WORKSPACE}/build/release-notes.txt"
 
       - name: Upload to Firebase App Distribution (fastlane)
