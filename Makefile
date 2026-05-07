@@ -18,7 +18,12 @@ BINDINGS_DIR = $(SPARK_SDK_DIR)/crates/breez-sdk/bindings
 SDK_SWIFT_DIR = $(BINDINGS_DIR)/langs/swift
 SDK_ANDROID_DIR = $(BINDINGS_DIR)/langs/android
 SDK_WASM_DIR = $(SPARK_SDK_DIR)/packages/wasm
-SDK_WASM_TGZ = $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-v0.1.0.tgz
+# Filename as `npm pack` emits it from packages/wasm: <scope>-<package>-<version>.tgz
+# with no `v` prefix. Earlier iterations of this file used a v-prefixed name,
+# which never matched the actual pack output and silently shadowed it with a
+# hand-renamed stale copy whenever one existed at the same path. Keep this in
+# sync with `version` in packages/wasm/package.json.
+SDK_WASM_TGZ = $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-0.1.0.tgz
 
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 
