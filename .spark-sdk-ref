@@ -6,11 +6,11 @@
 # and commit the change. scripts/resolve-spark-sdk.sh reads only
 # the first non-comment, non-blank line as the SHA.
 #
-# Branch: proto/passkey-aaguid (breez/spark-sdk) — exploratory:
-#   extends bulk-PRF path with AAGUID-aware provider resolution.
-#   Promote / merge alongside the matching glow-app + glow-web
-#   proto/passkey-aaguid branches once UX validation is done.
-# Last verified: 2026-05-07 — refreshed after the spark-sdk passkey
-# chain was rebased onto origin/main and CI's setup-glow-app action
-# started failing with "not our ref" / "unable to read tree".
-04f179b824a8302ffaf2216f94798818ea7e6819
+# Branch: proto/passkey-web-ux (breez/spark-sdk). Exploratory:
+#   wasm-side signalRename / signalCurrentUserDetails surface
+#   with defaultTimeoutMs ctor and explicit attestation: 'none',
+#   feeding the matching glow-web passkey provider hardening.
+#   Promote / merge alongside the corresponding glow-app + glow-web
+#   branches once UX validation is done.
+# Last verified: 2026-05-07.
+68d35180cdac201ed9e723efe387a88de5ec9125
