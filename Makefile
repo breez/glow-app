@@ -113,6 +113,24 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 		--iconBackgroundColorDark '#0a0a0f' \
 		--splashBackgroundColor '#0f0f18' \
 		--splashBackgroundColorDark '#0f0f18'
+	@# capacitor-assets emits adaptive-icon XML that references
+	@# `@mipmap/ic_launcher_background` (a PNG drawable that the tool
+	@# does NOT actually generate) and wraps the foreground in a
+	@# 16.7% inset that shrinks the safe-zone-baked logo. Restore the
+	@# project's existing pattern: solid `@color/ic_launcher_background`
+	@# (defined in values/ic_launcher_background.xml) + un-inset
+	@# foreground sized via prepare-native-assets.mjs. Without this
+	@# overwrite, `gradle :app:assembleDebug` fails resource linking
+	@# with "resource mipmap/ic_launcher_background not found".
+	@for f in android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml \
+	          android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml; do \
+		printf '%s\n' \
+			'<?xml version="1.0" encoding="utf-8"?>' \
+			'<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">' \
+			'    <background android:drawable="@color/ic_launcher_background"/>' \
+			'    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' \
+			'</adaptive-icon>' > "$$f"; \
+	done
 
 strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework Info.plist
 	@# spark-sdk's xcframework Info.plist declares `DebugSymbolsPath=dSYMs`
