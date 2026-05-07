@@ -19,6 +19,11 @@ android/local.properties
 # by Xcode on open; not shareable across machines.
 plugins/*/.swiftpm/
 
+# Plugin Package.resolved is library-side SwiftPM lockfile state.
+# The consuming app at ios/App/ pins versions; committing it here
+# would only create false-conflict noise across developers.
+plugins/*/Package.resolved
+
 # Environment
 .env
 .env.local

@@ -18,12 +18,18 @@ BINDINGS_DIR = $(SPARK_SDK_DIR)/crates/breez-sdk/bindings
 SDK_SWIFT_DIR = $(BINDINGS_DIR)/langs/swift
 SDK_ANDROID_DIR = $(BINDINGS_DIR)/langs/android
 SDK_WASM_DIR = $(SPARK_SDK_DIR)/packages/wasm
-# Filename as `npm pack` emits it from packages/wasm: <scope>-<package>-<version>.tgz
-# with no `v` prefix. Earlier iterations of this file used a v-prefixed name,
-# which never matched the actual pack output and silently shadowed it with a
-# hand-renamed stale copy whenever one existed at the same path. Keep this in
-# sync with `version` in packages/wasm/package.json.
-SDK_WASM_TGZ = $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-0.1.0.tgz
+# glow-web vendors its own SDK tarball at `glow-web/vendor/...` and references
+# it from package.json (introduced in glow-web 8ccdb71 to defeat Vercel's stale
+# `node_modules` cache for `file:` deps). The Makefile no longer pins a single
+# expected output filename: a fresh `make sdk-wasm` may emit
+# `breeztech-breez-sdk-spark-<version>.tgz` for whatever version is currently
+# in `packages/wasm/package.json` (with or without a prerelease tag).
+#
+# The `web` target installs from glow-web's package.json directly. To flow a
+# fresh local SDK build into glow-web, copy the tarball produced by
+# `make sdk-wasm` over `glow-web/vendor/<file>.tgz` and update glow-web's
+# package.json `file:` reference if the version changed.
+SDK_WASM_TGZ = $(firstword $(wildcard $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-*.tgz))
 
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 
@@ -61,17 +67,22 @@ endif
 endif
 
 # Device IDs (override with: make deploy-ios IOS_DEVICE_ID=xxx)
-# Make counts parens inside $(shell ...) regardless of shell quoting, so a
-# literal `(` in the grep pattern unbalances the call and errors with
-# "unterminated call to function 'shell': missing ')'". Wrap the pattern
-# in a var so Make sees balanced $(VAR) rather than a bare `(`.
-IOS_DEVICE_GREP := iPhone.*(
-IOS_DEVICE_ID ?= $(shell xcrun xctrace list devices 2>/dev/null | grep -m1 '$(IOS_DEVICE_GREP)' | sed 's/.*(\(.*\))/\1/')
+#
+# `xcrun xctrace list devices` (the previous picker source) doesn't
+# distinguish online from offline devices and orders Apple Watch
+# entries before iPhone entries on Xcode 26, so the old `iPhone.*(`
+# grep happily picked an unplugged secondary iPhone or the watch.
+# Switch to `devicectl --json-output` and filter on
+#   productType startswith "iPhone"  (excludes Apple Watch)
+#   transportType == "wired"          (excludes paired-but-unplugged)
+# which uniquely picks the USB-tethered iPhone.
+IOS_DEVICECTL_JSON := /tmp/devicectl-devices.json
+IOS_DEVICE_ID ?= $(shell xcrun devicectl list devices --json-output $(IOS_DEVICECTL_JSON) >/dev/null 2>&1 && python3 -c "import json,sys; d=json.load(open('$(IOS_DEVICECTL_JSON)'))['result']['devices']; print(next((x['hardwareProperties']['udid'] for x in d if x.get('hardwareProperties',{}).get('productType','').startswith('iPhone') and x.get('connectionProperties',{}).get('transportType')=='wired'), ''))" 2>/dev/null)
 ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | awk '{print $$1}')
 
 # ---------- High-level targets ----------
 
-.PHONY: setup resolve-sdk sdk sdk-ios sdk-android sdk-wasm web sync ios android deploy-ios deploy-android clean help assets
+.PHONY: setup resolve-sdk sdk sdk-ios sdk-android sdk-wasm strip-xcframework-dsyms web sync ios android deploy-ios deploy-android clean help assets
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -89,8 +100,8 @@ resolve-sdk: ## Clone spark-sdk at the pinned SHA (or verify existing checkout m
 
 sdk: resolve-sdk sdk-ios sdk-android sdk-wasm ## Build Spark SDK for all platforms
 
-web: ## Build glow-web with local SDK WASM package
-	cd glow-web && npm install $(SDK_WASM_TGZ) && npx vite build
+web: ## Build glow-web (uses glow-web's vendored SDK tarball; see SDK_WASM_TGZ comment)
+	cd glow-web && npm install && npx vite build
 
 sync: ## Copy web assets to native projects (without regenerating native configs)
 	npx cap copy
@@ -103,7 +114,23 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 		--splashBackgroundColor '#0f0f18' \
 		--splashBackgroundColorDark '#0f0f18'
 
-ios: web sync ## Build iOS app
+strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework Info.plist
+	@# spark-sdk's xcframework Info.plist declares `DebugSymbolsPath=dSYMs`
+	@# for each AvailableLibraries slice, expecting per-slice dSYM bundles
+	@# from spark-sdk's CI publish workflow. Local `make sdk-ios` doesn't
+	@# run dsymutil, so the declared paths don't exist and Xcode 26 fails
+	@# with "Missing path (...) from XCFramework ... as defined by
+	@# DebugSymbolsPath". `make sdk-ios` strips these at the tail of its
+	@# build, but a fresh spark-sdk checkout (or `git restore` against the
+	@# Info.plist) reverts the strip. Apply it on every iOS build so the
+	@# build is robust to an unstripped Info.plist without needing a full
+	@# SDK rebuild.
+	@for i in 0 1 2; do \
+		plutil -remove "AvailableLibraries.$$i.DebugSymbolsPath" \
+			$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/Info.plist 2>/dev/null || true; \
+	done
+
+ios: resolve-sdk web sync strip-xcframework-dsyms ## Build iOS app
 	xcodebuild -project ios/App/App.xcodeproj -scheme App \
 		-destination 'generic/platform=iOS' \
 		-configuration Debug \
@@ -111,13 +138,20 @@ ios: web sync ## Build iOS app
 		CODE_SIGN_STYLE=Automatic \
 		build
 
-android: web sync ## Build Android debug APK
+android: resolve-sdk web sync ## Build Android debug APK
 	cd android && ANDROID_HOME=$(ANDROID_HOME) ./gradlew assembleDebug
 
 deploy-ios: ios ## Build and install on connected iOS device
-	ios-deploy --id $(IOS_DEVICE_ID) \
-		--bundle $$(find ~/Library/Developer/Xcode/DerivedData/App-*/Build/Products/Debug-iphoneos/App.app -maxdepth 0 2>/dev/null | head -1) \
-		--justlaunch
+	@# Switched from `ios-deploy --justlaunch` to Apple's `xcrun devicectl`
+	@# in Xcode 16+. ios-deploy looks up `DeveloperDiskImage.dmg` under
+	@# .../iPhoneOS.platform/DeviceSupport/<ver>/, but Apple replaced
+	@# that flow with on-demand Personalized DDI mounted via CoreDevice.
+	@# The .dmg files no longer ship in Xcode 26, so ios-deploy falls
+	@# back to "no logging, no automatic launch" mode. devicectl uses
+	@# CoreDevice's auto-DDI-mount and is what Xcode itself drives.
+	@APP=$$(find ~/Library/Developer/Xcode/DerivedData/App-*/Build/Products/Debug-iphoneos/App.app -maxdepth 0 2>/dev/null | head -1); \
+		xcrun devicectl device install app --device $(IOS_DEVICE_ID) "$$APP"
+	xcrun devicectl device process launch --device $(IOS_DEVICE_ID) technology.breez.glow.dev
 
 deploy-android: android ## Build and install on connected Android device
 	@# `-d` allows installing over a higher versionCode (debuggable APKs only),
@@ -211,4 +245,6 @@ sdk-android: ## Build Spark SDK for Android and publish to mavenLocal
 
 sdk-wasm: ## Build Spark SDK WASM package
 	cd $(SDK_WASM_DIR) && $(MAKE) build
-	@echo "WASM SDK built: $(SDK_WASM_TGZ)"
+	@echo "WASM SDK built. To flow into glow-web, copy the tarball at"
+	@echo "  $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-*.tgz"
+	@echo "into glow-web/vendor/ and align glow-web/package.json's file: ref."
