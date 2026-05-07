@@ -33,7 +33,12 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = join(__dirname, '..');
 
-const SOURCE_LOGO = join(rootDir, 'glow-web/public/assets/Glow_Logo.png');
+// glow-web's brand mark switched from PNG to SVG in PR #193 (gradient
+// rebrand). sharp rasterizes SVG natively when `density` is set high
+// enough; we render at the largest target output (2732 for splash) so
+// the per-canvas resize below downscales rather than upscales.
+const SOURCE_LOGO = join(rootDir, 'glow-web/public/assets/Glow_Logo.svg');
+const SVG_RASTER_DENSITY = 600;
 const OUTPUT_DIR = join(rootDir, 'resources');
 const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (matches HomePage)
 
@@ -52,7 +57,7 @@ async function createCenteredLogo({ canvasSize, logoFraction, background, output
   const logoSize = Math.round(canvasSize * logoFraction);
 
   // Resize the logo with aspect-ratio preservation.
-  const logoBuffer = await sharp(SOURCE_LOGO)
+  const logoBuffer = await sharp(SOURCE_LOGO, { density: SVG_RASTER_DENSITY })
     .resize(logoSize, logoSize, {
       fit: 'contain',
       background: TRANSPARENT,
@@ -85,7 +90,7 @@ async function main() {
     mkdirSync(OUTPUT_DIR, { recursive: true });
   }
 
-  console.log('Preparing native asset sources from Glow_Logo.png...');
+  console.log('Preparing native asset sources from Glow_Logo.svg...');
 
   // icon-only.png: 1024x1024 transparent canvas with the logo at ~80% size.
   // @capacitor/assets fills the canvas via --iconBackgroundColor at generation time.
