@@ -46,18 +46,26 @@ const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (match
 const ICON_SIZE = 1024;
 const SPLASH_SIZE = 2732;
 
-// Logo occupancy on each canvas (as a fraction of the canvas size)
-const ICON_LOGO_FRACTION = 0.80;       // Full app icon: logo fills ~80% of the canvas
+// Logo occupancy on each canvas (as a fraction of the canvas size).
+// Values are tuned for the trimmed SVG content (no transparent margin),
+// so they land on the visible logo's bounding box rather than the
+// SVG viewBox.
+const ICON_LOGO_FRACTION = 0.85;       // Full app icon: logo fills ~85% of the canvas
 const FOREGROUND_LOGO_FRACTION = 0.66; // Adaptive icon foreground: safe zone is ~66%
-const SPLASH_LOGO_FRACTION = 0.22;     // Splash: logo is a small centered element
+const SPLASH_LOGO_FRACTION = 0.28;     // Splash: logo is a small centered element
 
 const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
 
 async function createCenteredLogo({ canvasSize, logoFraction, background, outputPath }) {
   const logoSize = Math.round(canvasSize * logoFraction);
 
-  // Resize the logo with aspect-ratio preservation.
+  // Trim the SVG's transparent border to the actual logo content. The
+  // gradient mark's viewBox (510x561) is non-square and includes a small
+  // built-in margin; without trim, the resize below honors viewBox bounds
+  // rather than the visible logo, so the same fraction renders smaller
+  // than the previous square-PNG source did. Trim normalizes that.
   const logoBuffer = await sharp(SOURCE_LOGO, { density: SVG_RASTER_DENSITY })
+    .trim()
     .resize(logoSize, logoSize, {
       fit: 'contain',
       background: TRANSPARENT,
