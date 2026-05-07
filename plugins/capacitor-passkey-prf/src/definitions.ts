@@ -32,7 +32,10 @@ export interface PasskeyPrfPlugin {
    * Register a new passkey with PRF support.
    * Triggers exactly one biometric/passkey prompt.
    *
-   * @returns The credential ID of the newly created passkey (base64-encoded).
+   * @returns Credential ID plus AAGUID (provider identifier) and the
+   *   backup-eligibility flag, all base64-encoded where applicable.
+   *   AAGUID and `backupEligible` are null when the platform doesn't
+   *   surface enough authenticator data to extract them.
    */
   createPasskey(options: {
     rpId?: string;
@@ -40,12 +43,18 @@ export interface PasskeyPrfPlugin {
     userName?: string;
     userDisplayName?: string;
     excludeCredentialIds?: string[];
-  }): Promise<{ credentialId: string }>;
+  }): Promise<{ credentialId: string; aaguid: string | null; backupEligible: boolean | null }>;
 
   /**
    * Derive a 32-byte seed from passkey PRF with the given salt.
    * If autoRegister is true (default) and no credential exists,
    * auto-registers one first. Triggers one or two biometric/passkey prompts.
+   *
+   * @param allowCredentialIds Optional base64-encoded credential IDs to
+   *   constrain the assertion. When non-empty, the OS picker shows only
+   *   these credentials (single-row auto-pick on iOS via
+   *   preferImmediatelyAvailableCredentials). When empty / omitted,
+   *   sign-in is fully discoverable.
    *
    * @returns Base64-encoded 32-byte seed.
    */
@@ -53,7 +62,23 @@ export interface PasskeyPrfPlugin {
     rpId?: string;
     salt: string;
     autoRegister?: boolean;
+    allowCredentialIds?: string[];
   }): Promise<{ seed: string }>;
+
+  /**
+   * Bulk derive: collapses multiple PRF salts into as few biometric
+   * ceremonies as the authenticator supports (1 ceremony per pair on
+   * iOS via dual-salt PRF, sequential elsewhere). Output ordering
+   * matches input.
+   *
+   * Same `allowCredentialIds` semantics as `derivePrfSeed`.
+   */
+  derivePrfSeeds(options: {
+    rpId?: string;
+    salts: string[];
+    autoRegister?: boolean;
+    allowCredentialIds?: string[];
+  }): Promise<{ seeds: string[] }>;
 
   /**
    * Verify the app's identity against the platform's out-of-band domain
