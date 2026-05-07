@@ -6,6 +6,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
+import android.security.keystore.UserNotAuthenticatedException
 import android.util.Base64
 import java.security.GeneralSecurityException
 import java.security.KeyStore
@@ -71,6 +72,11 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
             SeedVaultResult.Ok(cipher)
+        } catch (e: UserNotAuthenticatedException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.USER_NOT_AUTHENTICATED,
+                "Encrypt cipher init requires fresh biometric auth: ${e.message ?: "unknown"}",
+            )
         } catch (e: KeyPermanentlyInvalidatedException) {
             // The Keystore key was wiped (new biometric enrollment,
             // lock-screen credential change, etc.). Wipe any stale
@@ -102,6 +108,11 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
                 .apply()
 
             SeedVaultResult.Ok(Unit)
+        } catch (e: UserNotAuthenticatedException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.USER_NOT_AUTHENTICATED,
+                "Encrypt requires fresh biometric auth: ${e.message ?: "unknown"}",
+            )
         } catch (e: KeyPermanentlyInvalidatedException) {
             clearStoredCiphertextOnly()
             try { deleteKey() } catch (_: Exception) { /* best-effort */ }
@@ -137,6 +148,11 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
             SeedVaultResult.Ok(cipher)
+        } catch (e: UserNotAuthenticatedException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.USER_NOT_AUTHENTICATED,
+                "Decrypt cipher init requires fresh biometric auth: ${e.message ?: "unknown"}",
+            )
         } catch (e: KeyPermanentlyInvalidatedException) {
             clearStoredCiphertextOnly()
             try { deleteKey() } catch (_: Exception) { /* best-effort */ }
@@ -159,6 +175,11 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val ciphertext = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
             val plaintext = cipher.doFinal(ciphertext)
             SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+        } catch (e: UserNotAuthenticatedException) {
+            SeedVaultResult.Error(
+                NativeVaultErrorCode.USER_NOT_AUTHENTICATED,
+                "Decrypt requires fresh biometric auth: ${e.message ?: "unknown"}",
+            )
         } catch (e: KeyPermanentlyInvalidatedException) {
             clearStoredCiphertextOnly()
             try { deleteKey() } catch (_: Exception) { /* best-effort */ }
@@ -286,29 +307,9 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
     }
 
     /**
-     * Generate the F3 AES-GCM key. The three flags that matter:
-     *
-     *   - `setUserAuthenticationRequired(true)` — every cryptographic
-     *     operation against this key requires a fresh biometric auth
-     *     (via `BiometricPrompt.CryptoObject`). Without this, anyone
-     *     with access to the app's process while the device is
-     *     unlocked could decrypt the seed.
-     *
-     *   - `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`
-     *     (API 30+) — `0` means the authentication authorizes a
-     *     SINGLE crypto operation (not a time window), and
-     *     `AUTH_BIOMETRIC_STRONG` requires Class 3 biometrics (Face /
-     *     Touch) without the lock-screen credential fallback. On
-     *     API < 30 we fall back to the legacy `setUserAuthenticationValidityDurationSeconds(-1)`
-     *     which has the same single-operation semantics.
-     *
-     *   - `setInvalidatedByBiometricEnrollment(true)` — if the user
-     *     adds a new fingerprint / face enrollment, the key is wiped.
-     *     This forces re-onboarding with a fresh wallet, following
-     *     Apple's recommended "BiometryCurrentSet" failsafe pattern.
-     *     Without this, an attacker who could enroll their own
-     *     biometric (e.g. with a device unlock code) could then
-     *     decrypt the stored seed.
+     * Generate the F3 AES-GCM key. Time-based BIOMETRIC_STRONG auth
+     * (any successful biometric within KEY_AUTH_GRACE_SECONDS) plus
+     * invalidate-on-enrollment-change.
      */
     private fun generateKey(): SecretKey {
         val keyGenerator = KeyGenerator.getInstance(
@@ -325,20 +326,14 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             .setUserAuthenticationRequired(true)
             .setInvalidatedByBiometricEnrollment(true)
 
-        // Post-R (API 30+) we can explicitly opt into the single-
-        // operation, biometric-strong authentication policy. On older
-        // devices, `-1` seconds achieves the single-operation semantics
-        // but without the explicit biometric-strong binding; we rely
-        // on BiometricPrompt's runtime `AUTH_BIOMETRIC_STRONG`
-        // allowed-authenticators flag to enforce the class there.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             builder.setUserAuthenticationParameters(
-                0, // timeout seconds; 0 = authorize a single crypto op
+                KEY_AUTH_GRACE_SECONDS,
                 KeyProperties.AUTH_BIOMETRIC_STRONG,
             )
         } else {
             @Suppress("DEPRECATION")
-            builder.setUserAuthenticationValidityDurationSeconds(-1)
+            builder.setUserAuthenticationValidityDurationSeconds(KEY_AUTH_GRACE_SECONDS)
         }
 
         keyGenerator.init(builder.build())
@@ -420,6 +415,9 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
         private const val AES_KEY_SIZE_BITS = 256
         private const val GCM_TAG_BITS = 128
+
+        /** Grace window after a BIOMETRIC_STRONG auth, in seconds. */
+        private const val KEY_AUTH_GRACE_SECONDS = 30
 
         private const val SHARED_PREFERENCES_NAME = "technology.breez.glow.NativeVault"
         private const val PREFS_KEY_IV = "wallet_seed_iv"

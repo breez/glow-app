@@ -14,6 +14,8 @@ enum class NativeVaultErrorCode(val code: String) {
     BIOMETRIC_UNAVAILABLE("BIOMETRIC_UNAVAILABLE"),
     KEY_INVALIDATED("KEY_INVALIDATED"),
     NO_STORED_SEED("NO_STORED_SEED"),
+    /** Signals "prompt then retry" to the orchestrating plugin. */
+    USER_NOT_AUTHENTICATED("USER_NOT_AUTHENTICATED"),
     UNKNOWN("UNKNOWN"),
 }
 
