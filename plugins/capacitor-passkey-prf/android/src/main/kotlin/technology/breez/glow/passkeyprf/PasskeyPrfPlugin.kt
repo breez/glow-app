@@ -135,9 +135,14 @@ class PasskeyPrfPlugin : Plugin() {
 
                 // Capture asserted IDs so KnownCredentialsStore stays
                 // populated for excludeCredentialIds use on subsequent
-                // creates.
+                // creates, AND so we can return the credential ID in
+                // the response. glow-web reads the returned credId to
+                // update per-cred metadata (last-sign-in timestamp,
+                // active cred pin) on every successful sign-in.
+                val credIdRef = java.util.concurrent.atomic.AtomicReference<String?>()
                 provider.onAssertionCredentialId = { credentialId ->
                     val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+                    credIdRef.set(base64)
                     scope.launch {
                         try {
                             KnownCredentialsStore.add(context, base64, rpId)
@@ -149,6 +154,7 @@ class PasskeyPrfPlugin : Plugin() {
                 val seedBytes = provider.derivePrfSeed(salt)
                 val ret = JSObject()
                 ret.put("seed", Base64.encodeToString(seedBytes, Base64.NO_WRAP))
+                ret.put("credentialId", credIdRef.get())
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject(e.message ?: "PRF seed derivation failed", errorCode(e))
@@ -180,8 +186,15 @@ class PasskeyPrfPlugin : Plugin() {
                     catch (_: IllegalArgumentException) { null }
                 }
                 val provider = makeProvider(call, rpId, allowCredentialIds = allowBytes)
+                // See derivePrfSeed: capture for both KnownCredentialsStore
+                // population AND the response credId field. Bulk PRF runs
+                // a single assertion per pair, but every salt resolves
+                // against the same credential, so one credId covers the
+                // whole batch.
+                val credIdRef = java.util.concurrent.atomic.AtomicReference<String?>()
                 provider.onAssertionCredentialId = { credentialId ->
                     val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+                    credIdRef.set(base64)
                     scope.launch {
                         try {
                             KnownCredentialsStore.add(context, base64, rpId)
@@ -197,6 +210,7 @@ class PasskeyPrfPlugin : Plugin() {
                 }
                 val ret = JSObject()
                 ret.put("seeds", seedsBase64)
+                ret.put("credentialId", credIdRef.get())
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject(e.message ?: "Bulk PRF seed derivation failed", errorCode(e))
@@ -230,6 +244,24 @@ class PasskeyPrfPlugin : Plugin() {
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "Failed to clear known credentials", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun removeKnownCredentialId(call: PluginCall) {
+        val credentialId = call.getString("credentialId")
+        if (credentialId.isNullOrEmpty()) {
+            call.reject("Missing required parameter: credentialId", "INVALID_ARGUMENT")
+            return
+        }
+        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+        scope.launch {
+            try {
+                KnownCredentialsStore.remove(context, credentialId, rpId)
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject(e.message ?: "Failed to remove known credential", errorCode(e))
             }
         }
     }

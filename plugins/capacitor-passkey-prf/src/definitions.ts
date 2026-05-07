@@ -56,14 +56,18 @@ export interface PasskeyPrfPlugin {
    *   preferImmediatelyAvailableCredentials). When empty / omitted,
    *   sign-in is fully discoverable.
    *
-   * @returns Base64-encoded 32-byte seed.
+   * @returns Base64-encoded 32-byte seed plus the base64-encoded
+   *   credential ID that was actually used for the assertion.
+   *   `credentialId` is null when the platform did not surface it
+   *   (e.g. the assertion went through an auto-register path that
+   *   resolved before the assertion delegate fired).
    */
   derivePrfSeed(options: {
     rpId?: string;
     salt: string;
     autoRegister?: boolean;
     allowCredentialIds?: string[];
-  }): Promise<{ seed: string }>;
+  }): Promise<{ seed: string; credentialId: string | null }>;
 
   /**
    * Bulk derive: collapses multiple PRF salts into as few biometric
@@ -71,14 +75,16 @@ export interface PasskeyPrfPlugin {
    * iOS via dual-salt PRF, sequential elsewhere). Output ordering
    * matches input.
    *
-   * Same `allowCredentialIds` semantics as `derivePrfSeed`.
+   * Same `allowCredentialIds` semantics as `derivePrfSeed`. The bulk
+   * call uses ONE credential for all salts (single assertion), so the
+   * returned `credentialId` covers every entry in `seeds`.
    */
   derivePrfSeeds(options: {
     rpId?: string;
     salts: string[];
     autoRegister?: boolean;
     allowCredentialIds?: string[];
-  }): Promise<{ seeds: string[] }>;
+  }): Promise<{ seeds: string[]; credentialId: string | null }>;
 
   /**
    * Verify the app's identity against the platform's out-of-band domain
@@ -128,6 +134,21 @@ export interface PasskeyPrfPlugin {
    * Settings → Passwords, so the stale list is no longer meaningful.
    */
   clearKnownCredentialIds(options?: {
+    rpId?: string;
+  }): Promise<void>;
+
+  /**
+   * Drop a single credential ID from the persisted list for `rpId`.
+   * Used by the switch-failure recovery path so a deleted passkey
+   * stops appearing in the management list while the rest of the
+   * user's known credentials remain tracked.
+   *
+   * No-op when the cred isn't in the store. The native plugin clears
+   * the keychain item entirely if removing the last remaining cred,
+   * so a fresh add() after this takes the insert path.
+   */
+  removeKnownCredentialId(options: {
+    credentialId: string;
     rpId?: string;
   }): Promise<void>;
 }
