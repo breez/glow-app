@@ -10,7 +10,7 @@
 #   extends bulk-PRF path with AAGUID-aware provider resolution.
 #   Promote / merge alongside the matching glow-app + glow-web
 #   proto/passkey-aaguid branches once UX validation is done.
-# Last verified: 2026-05-06 — refreshed after the previous SHA
-# (71c9542c) was rebased away on origin and CI's setup-glow-app
-# action started failing with "not our ref" / "unable to read tree".
-a2dd78055a262f130f97a0da851252483729e387
+# Last verified: 2026-05-07 — refreshed after the spark-sdk passkey
+# chain was rebased onto origin/main and CI's setup-glow-app action
+# started failing with "not our ref" / "unable to read tree".
+04f179b824a8302ffaf2216f94798818ea7e6819
