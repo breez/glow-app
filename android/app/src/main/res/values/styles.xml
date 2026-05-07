@@ -26,7 +26,17 @@
 
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <!-- Cold-launch window background. @drawable/splash_window is
+             a layer-list (built by `make assets`) that fills with
+             spark-dark and centers a small splash_logo bitmap. A raw
+             @drawable/splash here would be stretched by Android to
+             fill the (typically tall portrait) window for ~50ms
+             before @capacitor/splash-screen takes over with
+             FIT_CENTER, surfacing as a vertically-stretched logo.
+             The layer-list keeps the BG uniform and respects the
+             bitmap's intrinsic size, so the cold-launch frame
+             matches the plugin-rendered splash that follows it. -->
+        <item name="android:background">@drawable/splash_window</item>
         <item name="android:statusBarColor">@color/spark_dark</item>
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarColor">@color/spark_dark</item>

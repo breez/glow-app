@@ -131,6 +131,24 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 			'    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' \
 			'</adaptive-icon>' > "$$f"; \
 	done
+	@# Android cold-launch splash: copy the script-emitted splash_logo.png
+	@# into drawable-xhdpi/ and write the layer-list drawable that
+	@# styles.xml's launch theme points at (@drawable/splash_window).
+	@# Without this layer-list wrapper, a raw bitmap as the window
+	@# background gets stretched to fill the (typically tall portrait)
+	@# window — which is what the user previously saw as a vertically-
+	@# stretched logo for ~50ms before the @capacitor/splash-screen
+	@# plugin took over.
+	@mkdir -p android/app/src/main/res/drawable-xhdpi
+	@cp resources/splash_logo.png android/app/src/main/res/drawable-xhdpi/splash_logo.png
+	@printf '%s\n' \
+		'<?xml version="1.0" encoding="utf-8"?>' \
+		'<layer-list xmlns:android="http://schemas.android.com/apk/res/android">' \
+		'    <item android:drawable="@color/spark_dark" />' \
+		'    <item>' \
+		'        <bitmap android:src="@drawable/splash_logo" android:gravity="center" />' \
+		'    </item>' \
+		'</layer-list>' > android/app/src/main/res/drawable/splash_window.xml
 
 strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework Info.plist
 	@# spark-sdk's xcframework Info.plist declares `DebugSymbolsPath=dSYMs`

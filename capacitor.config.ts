@@ -62,7 +62,15 @@ const config: CapacitorConfig = {
       launchFadeOutDuration: 200,
       backgroundColor: '#0f0f18',
       androidSplashResourceName: 'splash',
-      androidScaleType: 'CENTER_CROP',
+      // FIT_CENTER preserves the source aspect ratio (matches iOS
+      // LaunchScreen storyboard behavior) so the logo renders at the
+      // same on-screen size on both platforms — important because the
+      // splash logo size is tuned in prepare-native-assets.mjs to
+      // match HomePage's <GlowLogo sizePx={144}>. CENTER_CROP fills
+      // the screen by scaling to the larger dimension, which on a
+      // tall portrait phone effectively doubled the on-screen logo
+      // size relative to iOS / HomePage.
+      androidScaleType: 'FIT_CENTER',
       showSpinner: false,
       splashFullScreen: true,
       splashImmersive: true,

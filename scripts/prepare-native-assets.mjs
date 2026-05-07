@@ -45,14 +45,32 @@ const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (match
 // Target canvas sizes
 const ICON_SIZE = 1024;
 const SPLASH_SIZE = 2732;
+// Android cold-launch splash logo target size (xhdpi baseline).
+// Used by the layer-list `splash_window` drawable that the launch
+// theme points at — Android's per-density auto-scaling lands the
+// logo at consistent logical dp on every device, roughly matching
+// HomePage's <GlowLogo sizePx={144}> on a 393-wide screen.
+const SPLASH_LOGO_SIZE = 290;
 
 // Logo occupancy on each canvas (as a fraction of the canvas size).
 // Values are tuned for the trimmed SVG content (no transparent margin),
 // so they land on the visible logo's bounding box rather than the
 // SVG viewBox.
-const ICON_LOGO_FRACTION = 0.85;       // Full app icon: logo fills ~85% of the canvas
-const FOREGROUND_LOGO_FRACTION = 0.66; // Adaptive icon foreground: safe zone is ~66%
-const SPLASH_LOGO_FRACTION = 0.28;     // Splash: logo is a small centered element
+const ICON_LOGO_FRACTION = 0.75;       // Full app icon: logo fills ~75% of the canvas
+// Android's nominal 66% safe zone yields ~63% effective visible area
+// after the launcher mask, which puts a 0.66 logo right against the
+// visible mask edge (rays touching the border). Drop well below the
+// safe zone so the radiating rays land with comfortable breathing
+// room inside the mask regardless of launcher shape. The trade-off
+// is the icon reads slightly smaller than its peers, but that's
+// preferable to clipping or edge-hugging on the gradient rays.
+const FOREGROUND_LOGO_FRACTION = 0.50; // Adaptive icon foreground
+// Match HomePage's <GlowLogo sizePx={144}> on-screen size (~37% of a
+// 393-wide phone). This requires androidScaleType=FIT_CENTER (set in
+// capacitor.config.ts) so the splash drawable doesn't get stretched
+// to fill the screen, which would otherwise nearly double the
+// on-screen logo size on Android relative to iOS / HomePage.
+const SPLASH_LOGO_FRACTION = 0.37;
 
 const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
 
@@ -132,6 +150,19 @@ async function main() {
     outputPath: join(OUTPUT_DIR, 'splash.png'),
   });
   console.log(`  ✓ splash.png (${SPLASH_SIZE}x${SPLASH_SIZE}, logo ${Math.round(SPLASH_LOGO_FRACTION * 100)}%, baked #0f0f18 canvas)`);
+
+  // splash_logo.png: small transparent canvas with the logo at 100% fill,
+  // sized for the Android cold-launch layer-list drawable (separate from
+  // the post-launch plugin splash above). Capacitor-assets ignores this;
+  // `make assets` post-step copies it into drawable-xhdpi/ for Android's
+  // per-density auto-scaling.
+  await createCenteredLogo({
+    canvasSize: SPLASH_LOGO_SIZE,
+    logoFraction: 1.0,
+    background: TRANSPARENT,
+    outputPath: join(OUTPUT_DIR, 'splash_logo.png'),
+  });
+  console.log(`  ✓ splash_logo.png (${SPLASH_LOGO_SIZE}x${SPLASH_LOGO_SIZE}, logo 100%, transparent — Android cold-launch)`);
 
   console.log('\nDone. Next:');
   console.log("  npx capacitor-assets generate --ios --android \\");
