@@ -33,6 +33,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "createPasskey", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "derivePrfSeed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "derivePrfSeeds", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeKnownCredentialId", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkDomainAssociation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getKnownCredentialIds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearKnownCredentialIds", returnType: CAPPluginReturnPromise),
@@ -134,6 +135,18 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         call.resolve()
     }
 
+    @objc func removeKnownCredentialId(_ call: CAPPluginCall) {
+        guard let credentialId = call.getString("credentialId"), !credentialId.isEmpty else {
+            call.reject("Missing required parameter: credentialId", "INVALID_ARGUMENT")
+            return
+        }
+        if #available(iOS 18.0, *) {
+            let rpId = call.getString("rpId") ?? "keys.breez.technology"
+            KnownCredentialsStore.remove(credentialId: credentialId, rpId: rpId)
+        }
+        call.resolve()
+    }
+
     @objc func derivePrfSeed(_ call: CAPPluginCall) {
         guard let salt = call.getString("salt") else {
             call.reject("Missing required parameter: salt", "INVALID_ARGUMENT")
@@ -142,11 +155,27 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
 
         if #available(iOS 18.0, *) {
             let provider = makeProvider(call)
+            // Capture the asserted credential ID so the result can carry
+            // it back to JS. The plugin caller (glow-web) uses this to
+            // update per-cred metadata (last-sign-in timestamp, active
+            // cred pin) on every successful sign-in, mirroring the web
+            // SDK's onAssertionCredentialId path. Wraps the existing
+            // KnownCredentialsStore.add callback set in makeProvider.
+            let credIdBox = AssertedCredIdBox()
+            let originalCallback = provider.onAssertionCredentialId
+            provider.onAssertionCredentialId = { credentialId in
+                credIdBox.set(credentialId.base64EncodedString())
+                originalCallback?(credentialId)
+            }
             Task {
                 do {
                     await graceTracker.consume()
                     let seedData = try await provider.derivePrfSeed(salt: salt)
-                    call.resolve(["seed": seedData.base64EncodedString()])
+                    let credIdValue: Any = credIdBox.get() ?? NSNull()
+                    call.resolve([
+                        "seed": seedData.base64EncodedString(),
+                        "credentialId": credIdValue,
+                    ])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
@@ -164,12 +193,27 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
 
         if #available(iOS 18.0, *) {
             let provider = makeProvider(call)
+            // See derivePrfSeed: capture the asserted credentialId for
+            // the response so glow-web can keep per-cred metadata in
+            // sync. Bulk PRF runs one assertion per pair of salts, but
+            // they all share the same credential, so a single credId
+            // covers the whole batch.
+            let credIdBox = AssertedCredIdBox()
+            let originalCallback = provider.onAssertionCredentialId
+            provider.onAssertionCredentialId = { credentialId in
+                credIdBox.set(credentialId.base64EncodedString())
+                originalCallback?(credentialId)
+            }
             Task {
                 do {
                     await graceTracker.consume()
                     let outputs = try await provider.derivePrfSeeds(salts: salts)
                     let base64 = outputs.map { $0.base64EncodedString() }
-                    call.resolve(["seeds": base64])
+                    let credIdValue: Any = credIdBox.get() ?? NSNull()
+                    call.resolve([
+                        "seeds": base64,
+                        "credentialId": credIdValue,
+                    ])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
@@ -266,6 +310,27 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         return provider
+    }
+
+    /// Tiny reference holder for the credentialId captured during a
+    /// derive ceremony. The SDK's `onAssertionCredentialId` closure
+    /// fires synchronously inside the assertion delegate, before the
+    /// awaiting Task resumes from `derivePrfSeed(salt:)`. Using a
+    /// reference type avoids the value-semantics gotcha of capturing
+    /// a `var` from an escaping closure, and the explicit lock keeps
+    /// the read+write atomic if the SDK ever moves the callback off
+    /// the assertion thread.
+    private final class AssertedCredIdBox {
+        private let lock = NSLock()
+        private var _value: String?
+        func set(_ value: String) {
+            lock.lock(); defer { lock.unlock() }
+            _value = value
+        }
+        func get() -> String? {
+            lock.lock(); defer { lock.unlock() }
+            return _value
+        }
     }
 
     private func errorCode(_ error: Error) -> String {

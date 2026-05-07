@@ -82,6 +82,27 @@ internal object KnownCredentialsStore {
         clearEsp(context, rpId)
     }
 
+    /**
+     * Drop a single [credentialIdBase64] from the persisted set for
+     * [rpId]. No-op if absent. Used by the switch-failure recovery
+     * path so a deleted passkey stops appearing in the management list
+     * while the rest of the user's known credentials remain tracked.
+     */
+    suspend fun remove(context: Context, credentialIdBase64: String, rpId: String) {
+        val current = read(context, rpId).toMutableList()
+        if (!current.remove(credentialIdBase64)) return
+        if (current.isEmpty()) {
+            // Avoid persisting an empty array; clear() drops both
+            // backing entries so subsequent add() takes the insert
+            // path rather than overwriting an empty blob.
+            clear(context, rpId)
+        } else {
+            val encoded = encodeList(current)
+            writeToBlockStore(context, rpId, encoded)
+            writeToEsp(context, rpId, encoded)
+        }
+    }
+
     // ------------------------------------------------------------------
     // Block Store
     // ------------------------------------------------------------------

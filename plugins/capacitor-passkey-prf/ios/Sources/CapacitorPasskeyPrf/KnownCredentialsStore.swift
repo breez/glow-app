@@ -57,6 +57,24 @@ struct KnownCredentialsStore {
         write(ids: existing, rpId: rpId)
     }
 
+    /// Drop a single `credentialId` from the persisted list for `rpId`.
+    /// No-op if absent. Used by the switch-failure recovery path so a
+    /// deleted passkey stops appearing in the management list while the
+    /// rest of the user's known credentials remain tracked.
+    static func remove(credentialId: String, rpId: String) {
+        let existing = read(rpId: rpId)
+        let filtered = existing.filter { $0 != credentialId }
+        if filtered.count == existing.count { return }
+        if filtered.isEmpty {
+            // Avoid persisting an empty list — clear the item entirely so
+            // a fresh add() takes the insert path rather than the
+            // update-an-empty-blob path.
+            clear(rpId: rpId)
+        } else {
+            write(ids: filtered, rpId: rpId)
+        }
+    }
+
     /// Clear the persisted list for `rpId`. Used by the deletion-recovery
     /// flow when the platform reports `CredentialNotFound` on a sign-in
     /// attempt: the user has manually deleted the passkey from
