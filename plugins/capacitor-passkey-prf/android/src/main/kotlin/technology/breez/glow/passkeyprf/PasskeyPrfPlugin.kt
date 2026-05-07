@@ -72,8 +72,8 @@ class PasskeyPrfPlugin : Plugin() {
                 }
 
                 val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
-                val credentialId = provider.createPasskey(excludeBytes)
-                val credentialIdBase64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
+                val registered = provider.createPasskey(excludeBytes)
+                val credentialIdBase64 = Base64.encodeToString(registered.credentialId, Base64.NO_WRAP)
 
                 // Sync local write so the next assertion sees the new ID.
                 try {
@@ -95,6 +95,11 @@ class PasskeyPrfPlugin : Plugin() {
 
                 val ret = JSObject()
                 ret.put("credentialId", credentialIdBase64)
+                ret.put(
+                    "aaguid",
+                    registered.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
+                )
+                ret.put("backupEligible", registered.backupEligible)
                 call.resolve(ret)
             } catch (e: Exception) {
                 call.reject(e.message ?: "Passkey creation failed", errorCode(e))
@@ -115,18 +120,22 @@ class PasskeyPrfPlugin : Plugin() {
             try {
                 awaitPostCreateGracePeriod()
 
-                val allowedBytes = KnownCredentialsStore.read(context, rpId).mapNotNull { id ->
-                    try {
-                        Base64.decode(id, Base64.NO_WRAP)
-                    } catch (_: IllegalArgumentException) {
-                        null
-                    }
+                // Caller-supplied allowCredentialIds pin the assertion
+                // to the active cred (post-sign-in derives like
+                // listLabels / saveLabel / label switch). Empty /
+                // absent → fully discoverable (initial sign-in).
+                val callerAllowIds = call.getArray("allowCredentialIds")
+                    ?.toList<String>()
+                    ?: emptyList()
+                val allowBytes = callerAllowIds.mapNotNull { id ->
+                    try { Base64.decode(id, Base64.NO_WRAP) }
+                    catch (_: IllegalArgumentException) { null }
                 }
+                val provider = makeProvider(call, rpId, allowCredentialIds = allowBytes)
 
-                val provider = makeProvider(call, rpId, allowCredentialIds = allowedBytes)
-
-                // Capture asserted IDs so installs that predate the
-                // registry auto-migrate on first sign-in.
+                // Capture asserted IDs so KnownCredentialsStore stays
+                // populated for excludeCredentialIds use on subsequent
+                // creates.
                 provider.onAssertionCredentialId = { credentialId ->
                     val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
                     scope.launch {
@@ -161,15 +170,16 @@ class PasskeyPrfPlugin : Plugin() {
             try {
                 awaitPostCreateGracePeriod()
 
-                val allowedBytes = KnownCredentialsStore.read(context, rpId).mapNotNull { id ->
-                    try {
-                        Base64.decode(id, Base64.NO_WRAP)
-                    } catch (_: IllegalArgumentException) {
-                        null
-                    }
+                // See derivePrfSeed — caller-supplied allowCredentialIds pin
+                // active cred; empty / absent is fully discoverable.
+                val callerAllowIds = call.getArray("allowCredentialIds")
+                    ?.toList<String>()
+                    ?: emptyList()
+                val allowBytes = callerAllowIds.mapNotNull { id ->
+                    try { Base64.decode(id, Base64.NO_WRAP) }
+                    catch (_: IllegalArgumentException) { null }
                 }
-
-                val provider = makeProvider(call, rpId, allowCredentialIds = allowedBytes)
+                val provider = makeProvider(call, rpId, allowCredentialIds = allowBytes)
                 provider.onAssertionCredentialId = { credentialId ->
                     val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
                     scope.launch {

@@ -2,6 +2,28 @@ import Capacitor
 import Foundation
 import BreezSdkSpark
 
+/// GPM indexes new passkeys asynchronously: an immediate assertion
+/// fires before the credential is discoverable and the picker omits
+/// GPM. Hold the next derive call when GPM was the registering
+/// provider. Mirrors `POST_CREATE_GRACE_TOTAL_MS` in the Android
+/// plugin.
+private actor PostCreateGraceTracker {
+    private var deadline: Date?
+
+    func arm(after interval: TimeInterval) {
+        deadline = Date().addingTimeInterval(interval)
+    }
+
+    func consume() async {
+        guard let d = deadline else { return }
+        deadline = nil
+        let remaining = d.timeIntervalSinceNow
+        if remaining > 0 {
+            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+        }
+    }
+}
+
 @objc(PasskeyPrfPlugin)
 public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "PasskeyPrfPlugin"
@@ -15,6 +37,16 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getKnownCredentialIds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearKnownCredentialIds", returnType: CAPPluginReturnPromise),
     ]
+
+    private let graceTracker = PostCreateGraceTracker()
+
+    /// AAGUID `ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4`.
+    private static let gpmAaguid: Data = Data([
+        0xea, 0x9b, 0x8d, 0x66, 0x4d, 0x01, 0x1d, 0x21,
+        0x3c, 0xe4, 0xb6, 0xb4, 0x8c, 0xb5, 0x75, 0xd4,
+    ])
+
+    private static let postCreateGraceTotal: TimeInterval = 1.5
 
     @objc func isPrfAvailable(_ call: CAPPluginCall) {
         if #available(iOS 18.0, *) {
@@ -59,17 +91,22 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
 
             Task {
                 do {
-                    let credentialId = try await provider.createPasskey(
+                    let registered = try await provider.createPasskey(
                         excludeCredentialIds: excludeIds
                     )
-                    let credentialIdBase64 = credentialId.base64EncodedString()
-                    // Persist off the response path. The Keychain write
-                    // can hit iCloud-sync latency on first touch and
-                    // doesn't need to gate the JS-side promise.
-                    Task.detached(priority: .utility) {
-                        KnownCredentialsStore.add(credentialId: credentialIdBase64, rpId: rpId)
+                    let credentialIdBase64 = registered.credentialId.base64EncodedString()
+                    // Persist synchronously so the next derivePrfSeed call
+                    // sees the new ID in allowCredentialIds and iOS auto-routes
+                    // to the registering provider instead of showing a picker.
+                    KnownCredentialsStore.add(credentialId: credentialIdBase64, rpId: rpId)
+                    if let aaguid = registered.aaguid, aaguid == Self.gpmAaguid {
+                        await graceTracker.arm(after: Self.postCreateGraceTotal)
                     }
-                    call.resolve(["credentialId": credentialIdBase64])
+                    call.resolve([
+                        "credentialId": credentialIdBase64,
+                        "aaguid": registered.aaguid?.base64EncodedString() as Any,
+                        "backupEligible": registered.backupEligible as Any,
+                    ])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
@@ -107,6 +144,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
             let provider = makeProvider(call)
             Task {
                 do {
+                    await graceTracker.consume()
                     let seedData = try await provider.derivePrfSeed(salt: salt)
                     call.resolve(["seed": seedData.base64EncodedString()])
                 } catch {
@@ -128,6 +166,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
             let provider = makeProvider(call)
             Task {
                 do {
+                    await graceTracker.consume()
                     let outputs = try await provider.derivePrfSeeds(salts: salts)
                     let base64 = outputs.map { $0.base64EncodedString() }
                     call.resolve(["seeds": base64])
@@ -193,12 +232,12 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
     @available(iOS 18.0, *)
     private func makeProvider(_ call: CAPPluginCall) -> PasskeyProvider {
         let rpId = call.getString("rpId") ?? "keys.breez.technology"
-        // Constrain assertion to credential IDs we've registered for this
-        // RP (read from the iCloud-synced keychain). This guarantees
-        // deterministic seed derivation: iOS will only sign with one of
-        // our tracked credentials, never picking a sibling that happens
-        // to share the RP and produces a different PRF output.
-        let allowedIds: [Data] = KnownCredentialsStore.read(rpId: rpId)
+        // Caller-supplied allowCredentialIds let glow-web pin follow-up
+        // sign-in derives (listLabels, saveLabel, label switch) to the
+        // active cred so iOS auto-picks via
+        // preferImmediatelyAvailableCredentials when only one matches.
+        // Empty / absent → fully discoverable (initial sign-in).
+        let allowedIds: [Data] = (call.getArray("allowCredentialIds") as? [String] ?? [])
             .compactMap { Data(base64Encoded: $0) }
         let provider = PasskeyProvider(
             rpId: rpId,
