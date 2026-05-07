@@ -79,34 +79,72 @@ class NativeVaultPlugin : Plugin() {
             return
         }
 
-        // F3 step 1: init a Cipher in ENCRYPT_MODE. This may generate
-        // the Keystore key on first use.
-        val prepared = vault.prepareEncryptCipher()
-        when (prepared) {
+        // Fast path: try cipher.init + doFinal. Succeeds when a recent
+        // BIOMETRIC_STRONG auth (e.g. the WebAuthn ceremony that
+        // chained into onboarding) covers the key's grace window.
+        // For time-based-auth keys, init itself can throw
+        // UserNotAuthenticatedException; either prepare or finish may
+        // surface it.
+        when (val prepared = vault.prepareEncryptCipher()) {
             is SeedVaultResult.Ok -> {
-                // F3 step 2: show biometric prompt with CryptoObject(cipher).
-                biometric.authenticateWithCrypto(
-                    activity = hostActivity,
-                    cipher = prepared.value,
-                    title = "Protect your Glow wallet",
-                    subtitle = "Use your biometric credential to enable quick wallet unlock",
-                    cancelLabel = "Cancel",
-                    onSuccess = { authenticatedCipher ->
-                        // F3 step 3: run doFinal against the now-authorized Cipher.
-                        completeStoreAfterAuth(call, seed, authenticatedCipher)
-                    },
-                    onFailure = { code, message -> call.reject(message, code.code) },
-                )
+                when (val fast = vault.finishEncryptAndStore(seed, prepared.value)) {
+                    is SeedVaultResult.Ok -> {
+                        call.resolve()
+                        return
+                    }
+                    is SeedVaultResult.Error -> {
+                        if (fast.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
+                            call.reject(fast.message, fast.code.code)
+                            return
+                        }
+                        // Fall through to the prompt path below.
+                    }
+                    is SeedVaultResult.NotFound -> {
+                        call.reject(
+                            "Seed vault returned NotFound on finishEncryptAndStore",
+                            NativeVaultErrorCode.UNKNOWN.code,
+                        )
+                        return
+                    }
+                }
             }
             is SeedVaultResult.NotFound -> {
-                // NotFound has no meaning for a write path; surface as UNKNOWN.
                 call.reject(
                     "Seed vault returned NotFound on prepareEncryptCipher",
                     NativeVaultErrorCode.UNKNOWN.code,
                 )
+                return
             }
-            is SeedVaultResult.Error -> call.reject(prepared.message, prepared.code.code)
+            is SeedVaultResult.Error -> {
+                if (prepared.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
+                    call.reject(prepared.message, prepared.code.code)
+                    return
+                }
+                // Fall through to the prompt path below.
+            }
         }
+
+        // Slow path: prompt without CryptoObject (the canonical pattern
+        // for time-based-auth keys), then retry the fast path with a
+        // fresh cipher. The successful prompt seeds the Keystore's
+        // auth state for the next [KEY_AUTH_GRACE_SECONDS] seconds.
+        biometric.authenticate(
+            activity = hostActivity,
+            title = "Protect your Glow wallet",
+            subtitle = "Use your biometric credential to enable quick wallet unlock",
+            cancelLabel = "Cancel",
+            onSuccess = {
+                when (val rePrepared = vault.prepareEncryptCipher()) {
+                    is SeedVaultResult.Ok -> completeStoreAfterAuth(call, seed, rePrepared.value)
+                    is SeedVaultResult.NotFound -> call.reject(
+                        "Seed vault returned NotFound on prepareEncryptCipher",
+                        NativeVaultErrorCode.UNKNOWN.code,
+                    )
+                    is SeedVaultResult.Error -> call.reject(rePrepared.message, rePrepared.code.code)
+                }
+            },
+            onFailure = { code, message -> call.reject(message, code.code) },
+        )
     }
 
     @PluginMethod
@@ -135,34 +173,69 @@ class NativeVaultPlugin : Plugin() {
             return
         }
 
-        // 3. F3 step 1: init a Cipher in DECRYPT_MODE against the stored IV.
-        val prepared = vault.prepareDecryptCipher()
-        when (prepared) {
+        // Fast path: try cipher.init + doFinal. Either prepare or
+        // finish may surface UserNotAuthenticatedException with a
+        // time-based-auth key; both routes fall through to the prompt.
+        when (val prepared = vault.prepareDecryptCipher()) {
             is SeedVaultResult.Ok -> {
-                // F3 step 2: show biometric prompt with CryptoObject(cipher).
-                biometric.authenticateWithCrypto(
-                    activity = hostActivity,
-                    cipher = prepared.value,
-                    title = "Unlock Glow wallet",
-                    subtitle = "Use your biometric credential to access your wallet",
-                    cancelLabel = "Cancel",
-                    onSuccess = { authenticatedCipher ->
-                        // F3 step 3: run doFinal against the now-authorized Cipher.
-                        completeRetrieveAfterAuth(call, authenticatedCipher)
-                    },
-                    onFailure = { code, message -> call.reject(message, code.code) },
-                )
+                when (val fast = vault.finishDecrypt(prepared.value)) {
+                    is SeedVaultResult.Ok -> {
+                        val ret = JSObject().apply { put("seed", fast.value) }
+                        call.resolve(ret)
+                        return
+                    }
+                    is SeedVaultResult.Error -> {
+                        if (fast.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
+                            call.reject(fast.message, fast.code.code)
+                            return
+                        }
+                        // Fall through to the prompt path below.
+                    }
+                    is SeedVaultResult.NotFound -> {
+                        call.reject(
+                            "No seed is currently persisted in secure storage.",
+                            NativeVaultErrorCode.NO_STORED_SEED.code,
+                        )
+                        return
+                    }
+                }
             }
             is SeedVaultResult.NotFound -> {
-                // Race: the entry was cleared between the pre-flight check
-                // and `prepareDecryptCipher`. Surface as NO_STORED_SEED.
                 call.reject(
                     "No seed is currently persisted in secure storage.",
                     NativeVaultErrorCode.NO_STORED_SEED.code,
                 )
+                return
             }
-            is SeedVaultResult.Error -> call.reject(prepared.message, prepared.code.code)
+            is SeedVaultResult.Error -> {
+                if (prepared.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
+                    call.reject(prepared.message, prepared.code.code)
+                    return
+                }
+                // Fall through to the prompt path below.
+            }
         }
+
+        // Slow path: prompt without CryptoObject (the canonical pattern
+        // for time-based-auth keys), then retry the fast path with a
+        // fresh cipher.
+        biometric.authenticate(
+            activity = hostActivity,
+            title = "Unlock Glow wallet",
+            subtitle = "Use your biometric credential to access your wallet",
+            cancelLabel = "Cancel",
+            onSuccess = {
+                when (val rePrepared = vault.prepareDecryptCipher()) {
+                    is SeedVaultResult.Ok -> completeRetrieveAfterAuth(call, rePrepared.value)
+                    is SeedVaultResult.NotFound -> call.reject(
+                        "No seed is currently persisted in secure storage.",
+                        NativeVaultErrorCode.NO_STORED_SEED.code,
+                    )
+                    is SeedVaultResult.Error -> call.reject(rePrepared.message, rePrepared.code.code)
+                }
+            },
+            onFailure = { code, message -> call.reject(message, code.code) },
+        )
     }
 
     @PluginMethod

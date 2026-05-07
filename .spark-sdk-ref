@@ -6,6 +6,9 @@
 # and commit the change. scripts/resolve-spark-sdk.sh reads only
 # the first non-comment, non-blank line as the SHA.
 #
-# Branch: pr/passkey-core (breez/spark-sdk)
-# Last verified: 2026-04-30
-56ad3e59cdc37ad9741b50820d045a54c4c958c3
+# Branch: proto/passkey-bulk-prf (breez/spark-sdk) — exploratory:
+#   adds derive_prf_seeds + Passkey.setup_wallet bulk-PRF path.
+#   Promote / merge alongside the matching glow-app + glow-web
+#   proto/passkey-bulk-prf branches once UX validation is done.
+# Last verified: 2026-05-07
+8c9ac52b64753c4710425deff9ca0d05984835a0

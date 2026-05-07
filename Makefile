@@ -115,7 +115,13 @@ deploy-ios: ios ## Build and install on connected iOS device
 		--justlaunch
 
 deploy-android: android ## Build and install on connected Android device
-	adb -s $(ANDROID_DEVICE_ID) install -r android/app/build/outputs/apk/debug/app-debug.apk
+	@# `-d` allows installing over a higher versionCode (debuggable APKs only),
+	@# which lets a local debug build replace a FAD preview install without
+	@# forcing the developer to uninstall first. Skipping `-d` produces
+	@# `INSTALL_FAILED_VERSION_DOWNGRADE` whenever the device has a CI-signed
+	@# build (CI bumps versionCode per run; local builds use the static
+	@# value in build.gradle).
+	adb -s $(ANDROID_DEVICE_ID) install -r -d android/app/build/outputs/apk/debug/app-debug.apk
 	@# The Debug build's applicationId is `technology.breez.glow.dev` (from app/build.gradle)
 	@# and the MainActivity class lives in the `technology.breez.glow` namespace, so
 	@# `am start -n technology.breez.glow.dev/.MainActivity` resolves to the wrong FQCN and

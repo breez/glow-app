@@ -19,10 +19,12 @@
 #    `git rev-parse --short HEAD` locally.)
 #
 # VERSION_CODE:
-#   GITHUB_RUN_NUMBER          (CI — monotonic, distinct per run; Play's
-#                               monotonicity requirement is satisfied
-#                               trivially)
-#   1                          (local invocation with no GITHUB_RUN_NUMBER)
+#   MAJOR*10_000_000 + MINOR*100_000 + PATCH*1_000 + GITHUB_RUN_NUMBER
+#   (CI — strictly monotonic per repo because GITHUB_RUN_NUMBER is. The
+#   semver prefix puts each version in its own decimal band, and the
+#   raw run number flows in unbounded so consecutive 0.0.5 dispatches
+#   produce 5_173, 5_174, … without the legacy `% 1000` collisions.
+#   Locally with no GITHUB_RUN_NUMBER, falls back to the prefix + 1.)
 #
 # Hard-fail cases (preserve the 2026-04-18 guardrail that stopped a 0.0.0 IPA
 # from shipping to TestFlight):
@@ -118,7 +120,13 @@ else
   MODE="dev"
 fi
 
-VERSION_CODE="${GITHUB_RUN_NUMBER:-1}"
+IFS='.' read -r BASIS_MAJOR BASIS_MINOR BASIS_PATCH <<< "$BASIS_VERSION"
+VERSION_CODE=$((
+  BASIS_MAJOR * 10000000 +
+  BASIS_MINOR * 100000 +
+  BASIS_PATCH * 1000 +
+  ${GITHUB_RUN_NUMBER:-1}
+))
 
 echo "MODE=$MODE"
 echo "BASIS_VERSION=$BASIS_VERSION"

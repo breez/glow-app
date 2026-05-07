@@ -84,6 +84,19 @@ dependencies {
     // Coroutines (required by CredentialManagerPrfProvider for Dispatchers.Main)
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0"
 
+    // Block Store + coroutines bridge: synced credential-IDs registry.
+    // Block Store is the closest Android equivalent to iOS's iCloud
+    // Keychain — backed by Google Play Services, E2E-encrypted, restored
+    // automatically on reinstall and across devices via the user's
+    // Google account.
+    implementation "com.google.android.gms:play-services-auth-blockstore:16.4.0"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.8.0"
+
+    // EncryptedSharedPreferences fallback: used when Block Store is
+    // unavailable (e.g. devices without Google Play Services). Provides
+    // at-rest encryption via AndroidKeyStore-backed master key.
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
+
     // JNA (required by UniFFI-generated Kotlin bindings)
     implementation "net.java.dev.jna:jna:5.18.0@aar"
 

@@ -10,6 +10,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "isPrfAvailable", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "createPasskey", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "derivePrfSeed", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "derivePrfSeeds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "checkDomainAssociation", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getKnownCredentialIds", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearKnownCredentialIds", returnType: CAPPluginReturnPromise),
@@ -62,10 +63,12 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
                         excludeCredentialIds: excludeIds
                     )
                     let credentialIdBase64 = credentialId.base64EncodedString()
-                    // Persist into the synced keychain so future
-                    // createPasskey calls (including post-uninstall) see
-                    // this ID in their excludeCredentials list.
-                    KnownCredentialsStore.add(credentialId: credentialIdBase64, rpId: rpId)
+                    // Persist off the response path. The Keychain write
+                    // can hit iCloud-sync latency on first touch and
+                    // doesn't need to gate the JS-side promise.
+                    Task.detached(priority: .utility) {
+                        KnownCredentialsStore.add(credentialId: credentialIdBase64, rpId: rpId)
+                    }
                     call.resolve(["credentialId": credentialIdBase64])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
@@ -106,6 +109,28 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
                 do {
                     let seedData = try await provider.derivePrfSeed(salt: salt)
                     call.resolve(["seed": seedData.base64EncodedString()])
+                } catch {
+                    call.reject(error.localizedDescription, errorCode(error))
+                }
+            }
+        } else {
+            call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+        }
+    }
+
+    @objc func derivePrfSeeds(_ call: CAPPluginCall) {
+        guard let salts = call.getArray("salts", String.self), !salts.isEmpty else {
+            call.reject("Missing or empty required parameter: salts", "INVALID_ARGUMENT")
+            return
+        }
+
+        if #available(iOS 18.0, *) {
+            let provider = makeProvider(call)
+            Task {
+                do {
+                    let outputs = try await provider.derivePrfSeeds(salts: salts)
+                    let base64 = outputs.map { $0.base64EncodedString() }
+                    call.resolve(["seeds": base64])
                 } catch {
                     call.reject(error.localizedDescription, errorCode(error))
                 }
@@ -192,7 +217,14 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         // "already exists" refusal correctly.
         provider.onAssertionCredentialId = { credentialId in
             let base64 = credentialId.base64EncodedString()
-            KnownCredentialsStore.add(credentialId: base64, rpId: rpId)
+            // Detach: this callback fires inside the assertion delegate
+            // which then resumes the continuation that drives the JS
+            // promise. A blocking Keychain write here is on the
+            // user-perceived critical path. Add() is idempotent so
+            // ordering against subsequent calls doesn't matter.
+            Task.detached(priority: .utility) {
+                KnownCredentialsStore.add(credentialId: base64, rpId: rpId)
+            }
         }
         return provider
     }
