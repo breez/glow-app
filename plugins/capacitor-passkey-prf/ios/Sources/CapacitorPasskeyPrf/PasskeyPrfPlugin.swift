@@ -47,7 +47,7 @@ public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
         0x3c, 0xe4, 0xb6, 0xb4, 0x8c, 0xb5, 0x75, 0xd4,
     ])
 
-    private static let postCreateGraceTotal: TimeInterval = 1.5
+    private static let postCreateGraceTotal: TimeInterval = 0.8
 
     @objc func isPrfAvailable(_ call: CAPPluginCall) {
         if #available(iOS 18.0, *) {
