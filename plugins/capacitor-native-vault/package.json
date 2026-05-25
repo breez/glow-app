@@ -1,29 +1,12 @@
 {
   "name": "capacitor-native-vault",
   "version": "0.0.1",
-  "description": "Capacitor plugin for native biometric-gated seed storage (iOS Keychain / Android Keystore)",
-  "main": "dist/plugin.cjs.js",
-  "module": "dist/esm/index.js",
-  "types": "dist/esm/index.d.ts",
-  "unpkg": "dist/plugin.js",
+  "description": "Capacitor plugin: biometric-bound seed storage (iOS Keychain SecAccessControl / Android Keystore + BiometricPrompt.CryptoObject).",
   "files": [
     "android/src/main/",
     "android/build.gradle",
-    "dist/",
     "ios/Sources/",
     "ios/Package.swift"
-  ],
-  "scripts": {
-    "build": "tsc",
-    "clean": "rm -rf dist"
-  },
-  "keywords": [
-    "capacitor",
-    "plugin",
-    "keychain",
-    "keystore",
-    "biometric",
-    "secure-storage"
   ],
   "capacitor": {
     "ios": {
@@ -32,9 +15,6 @@
     "android": {
       "src": "android"
     }
-  },
-  "devDependencies": {
-    "typescript": "^5.0.0"
   },
   "peerDependencies": {
     "@capacitor/core": "^8.0.0"

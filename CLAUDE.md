@@ -33,10 +33,10 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup guide including SDK build pr
 
 - `capacitor.config.ts` — Capacitor config, webDir points to `glow-web/dist`. `loggingBehavior` is pinned to `'none'` — see the security note below.
 - `plugins/capacitor-passkey-prf/` — Local Capacitor plugin bridging native passkey PRF APIs
-  - iOS: Swift, wraps SDK's `PlatformPasskeyPrfProvider` (ASAuthorization + PRF extension)
-  - Android: Kotlin, wraps SDK's `CredentialManagerPrfProvider` (CredentialManager + PRF extension)
-  - Native-only — no web fallback; on web, glow-web uses the SDK's `WebAuthnPrfProvider` directly
-- Integration with glow-web via `PasskeyPrfProvider` interface — runtime detection swaps native vs. browser provider
+  - iOS: Swift, wraps SDK's `BreezSdkSpark.PasskeyProvider` (ASAuthorization + PRF extension)
+  - Android: Kotlin, wraps SDK's `technology.breez.spark.passkey.PasskeyProvider` (CredentialManager + PRF extension)
+  - Native-only — no web fallback; on web, glow-web uses the SDK's `PasskeyProvider` from `@breeztech/breez-sdk-spark/passkey-prf-provider` directly.
+- Integration with glow-web via the SDK's `PrfProvider` interface — runtime detection swaps native vs. browser provider
 - `plugins/capacitor-native-vault/` — Local Capacitor plugin for biometric-bound seed storage
   - iOS: Swift, Keychain `SecAccessControl` with `.biometryCurrentSet`
   - Android: Kotlin, Keystore AES-GCM with `setUserAuthenticationRequired(true)` + `BiometricPrompt.CryptoObject`
@@ -87,7 +87,7 @@ V Capacitor: callback: X, pluginId: Y, methodName: Z, methodData: {...}
 
 Several plugin calls in this app pass wallet seed material through the bridge:
 
-- `PasskeyPrf.derivePrfSeed` returns the 32-byte PRF entropy as base64.
+- `PasskeyPrf.deriveSeeds` returns the 32-byte PRF entropy as base64.
 - `NativeVault.storeSeed` receives the plaintext mnemonic JSON blob from `NativeSecureStorage.storeSeed`.
 
 With any setting other than `'none'`, those payloads are written to logcat (Android) / NSLog (iOS) and are readable by any process with `READ_LOGS` (granted to many OEM apps on Android; Console.app on iOS).
@@ -115,17 +115,14 @@ Do NOT set `VITE_CONSOLE_LOGGING=true` for production release builds.
 
 ### Outstanding follow-ups (post-`feat/native-secure-storage-followups`)
 
-Tracked in `~/.claude/plans/delightful-sleeping-marshmallow.md`:
-
 - **Plaintext seeds across the Capacitor bridge**: even with `loggingBehavior: 'none'`, `NativeVault.storeSeed` still passes the JSON-encoded mnemonic through Capacitor's bridge as a plain method argument. The proper fix is an opaque-handle pattern: have `capacitor-passkey-prf` keep the PRF entropy on the native side and expose only an opaque handle to JS, then have `capacitor-native-vault` accept a passkey-derived handle directly so the seed never crosses the bridge in plaintext at all. Until that lands, the `loggingBehavior` config pin is the only thing keeping bridge traces out of system logs — defense-in-depth would make the config choice non-load-bearing.
 - **Logcat sanity check on a debug Android build**: re-grep `adb logcat` for "mnemonic" / "seed" / wallet words after a fresh onboarding run to confirm the `loggingBehavior: 'none'` fix is working end-to-end. Was queued during Phase 3 device verification but interrupted before the check could run.
 
 ## Phase 4A: App Polish
 
 Makes the Capacitor shell feel like a first-class native app. Ships on
-the `feat/phase-4a-app-polish` branch. See `PLAN.md` for the full
-feature-by-feature breakdown; this section is the architecture-level
-pointer list a maintainer needs to navigate the code.
+the `feat/phase-4a-app-polish` branch. This section is the
+architecture-level pointer list a maintainer needs to navigate the code.
 
 ### Branding + native shell
 
@@ -410,8 +407,7 @@ Breez-org's plan quota:
 
 Expected total: ~6,900 billed minutes/month. Fits Enterprise
 Cloud easily; ~3,900-minute overage on Pro/Team at ~$30/mo
-if the numbers track the estimate. Escape hatches documented
-in plan-4b Step 10.
+if the numbers track the estimate.
 
 ## Phase 4C: Store Distribution
 

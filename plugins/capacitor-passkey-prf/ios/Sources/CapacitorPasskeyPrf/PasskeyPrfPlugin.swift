@@ -1,343 +1,311 @@
+import BreezSdkSpark
 import Capacitor
 import Foundation
-import BreezSdkSpark
+import os.log
 
-/// GPM indexes new passkeys asynchronously: an immediate assertion
-/// fires before the credential is discoverable and the picker omits
-/// GPM. Hold the next derive call when GPM was the registering
-/// provider. Mirrors `POST_CREATE_GRACE_TOTAL_MS` in the Android
-/// plugin.
-private actor PostCreateGraceTracker {
-    private var deadline: Date?
-
-    func arm(after interval: TimeInterval) {
-        deadline = Date().addingTimeInterval(interval)
-    }
-
-    func consume() async {
-        guard let d = deadline else { return }
-        deadline = nil
-        let remaining = d.timeIntervalSinceNow
-        if remaining > 0 {
-            try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-        }
-    }
-}
-
-@objc(PasskeyPrfPlugin)
-public class PasskeyPrfPlugin: CAPPlugin, CAPBridgedPlugin {
-    public let identifier = "PasskeyPrfPlugin"
-    public let jsName = "PasskeyPrf"
+/// Capacitor bridge over `BreezSdkSpark.PasskeyClient`.
+///
+/// Owns a single `PasskeyClient` per session (built in `initialize`)
+/// plus a process-lifetime `KeychainCredentialRegistry` so the SDK
+/// can auto-merge known credential IDs on every ceremony.
+@objc(PasskeyPlugin)
+public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
+    public let identifier = "PasskeyPlugin"
+    public let jsName = "Passkey"
     public let pluginMethods: [CAPPluginMethod] = [
-        CAPPluginMethod(name: "isPrfAvailable", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "createPasskey", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "derivePrfSeed", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "derivePrfSeeds", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "removeKnownCredentialId", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "checkDomainAssociation", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "initialize", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "checkAvailability", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "register", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "signIn", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "connectWithPasskey", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "listLabels", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "storeLabel", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getKnownCredentialIds", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "removeKnownCredentialId", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearKnownCredentialIds", returnType: CAPPluginReturnPromise),
     ]
 
-    private let graceTracker = PostCreateGraceTracker()
+    private let registry: Any? = {
+        if #available(iOS 18.0, *) { return KeychainCredentialRegistry() }
+        return nil
+    }()
+    private var client: PasskeyClient?
 
-    /// AAGUID `ea9b8d66-4d01-1d21-3ce4-b6b48cb575d4`.
-    private static let gpmAaguid: Data = Data([
-        0xea, 0x9b, 0x8d, 0x66, 0x4d, 0x01, 0x1d, 0x21,
-        0x3c, 0xe4, 0xb6, 0xb4, 0x8c, 0xb5, 0x75, 0xd4,
-    ])
+    private static let log = OSLog(
+        subsystem: "technology.breez.glow.passkey",
+        category: "PasskeyPlugin"
+    )
 
-    private static let postCreateGraceTotal: TimeInterval = 0.8
-
-    @objc func isPrfAvailable(_ call: CAPPluginCall) {
-        if #available(iOS 18.0, *) {
-            let provider = makeProvider(call)
-            Task {
-                do {
-                    let available = try await provider.isPrfAvailable()
-                    call.resolve(["available": available])
-                } catch {
-                    call.reject(error.localizedDescription, errorCode(error))
-                }
+    @objc func initialize(_ call: CAPPluginCall) {
+        guard #available(iOS 18.0, *) else {
+            call.reject("Passkey requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+            return
+        }
+        guard let rpId = call.getString("rpId"), let rpName = call.getString("rpName") else {
+            call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
+            return
+        }
+        let provider = PasskeyProvider(
+            rpId: rpId,
+            rpName: rpName,
+            userName: call.getString("userName"),
+            userDisplayName: call.getString("userDisplayName"),
+            credentialRegistry: registry as? KeychainCredentialRegistry,
+            onRegistryError: { op, err in
+                os_log("Registry %{public}@ failed: %{public}@",
+                       log: PasskeyPlugin.log, type: .info,
+                       String(describing: op),
+                       err.localizedDescription)
             }
-        } else {
-            call.resolve(["available": false])
+        )
+        let config = call.getString("defaultLabel").map { PasskeyConfig(defaultLabel: $0) }
+        client = PasskeyClient(
+            prfProvider: provider,
+            breezApiKey: call.getString("breezApiKey"),
+            config: config
+        )
+        call.resolve()
+    }
+
+    @objc func checkAvailability(_ call: CAPPluginCall) {
+        guard let c = client else {
+            call.resolve(["type": "prfUnsupported"])
+            return
+        }
+        Task {
+            do {
+                call.resolve(Self.encodeAvailability(try await c.checkAvailability()))
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
         }
     }
 
-    @objc func createPasskey(_ call: CAPPluginCall) {
-        if #available(iOS 18.0, *) {
-            let provider = makeProvider(call)
-            let rpId = call.getString("rpId") ?? "keys.breez.technology"
+    @objc func register(_ call: CAPPluginCall) {
+        guard let c = client else {
+            call.reject("Plugin not initialized", "NOT_INITIALIZED")
+            return
+        }
+        let request = RegisterRequest(
+            label: call.getString("label"),
+            excludeCredentials: parseB64Array(call, key: "excludeCredentials")
+        )
+        Task {
+            do {
+                let response = try await c.register(request: request)
+                call.resolve([
+                    "wallet": Self.encodeWallet(response.wallet),
+                    "credential": Self.encodeCredential(response.credential),
+                ])
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
+        }
+    }
 
-            // Build excludeCredentials by merging two sources:
-            //   1. Caller-provided base64 IDs (e.g. localStorage list on
-            //      web, kept for legacy compatibility).
-            //   2. The plugin-owned, iCloud-synced keychain store. This
-            //      survives app uninstall and restores from iCloud, which
-            //      the localStorage list does not.
-            // The platform refuses registration if any listed credential
-            // is currently registered on the device, regardless of source.
-            var seen = Set<String>()
-            var excludeBase64: [String] = []
-            if let base64Array = call.getArray("excludeCredentialIds", String.self) {
-                for id in base64Array where seen.insert(id).inserted {
-                    excludeBase64.append(id)
-                }
+    @objc func signIn(_ call: CAPPluginCall) {
+        guard let c = client else {
+            call.reject("Plugin not initialized", "NOT_INITIALIZED")
+            return
+        }
+        let request = SignInRequest(
+            label: call.getString("label"),
+            allowCredentials: parseB64Array(call, key: "allowCredentials"),
+            preferImmediatelyAvailableCredentials: call.getBool("preferImmediatelyAvailableCredentials")
+        )
+        Task {
+            do {
+                let response = try await c.signIn(request: request)
+                var out: [String: Any] = [
+                    "wallet": Self.encodeWallet(response.wallet),
+                    "labels": response.labels,
+                ]
+                out["credentialId"] = response.credentialId?.base64EncodedString() ?? NSNull()
+                call.resolve(out)
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
             }
-            for id in KnownCredentialsStore.read(rpId: rpId) where seen.insert(id).inserted {
-                excludeBase64.append(id)
-            }
-            let excludeIds: [Data] = excludeBase64.compactMap { Data(base64Encoded: $0) }
+        }
+    }
 
-            Task {
-                do {
-                    let registered = try await provider.createPasskey(
-                        excludeCredentialIds: excludeIds
-                    )
-                    let credentialIdBase64 = registered.credentialId.base64EncodedString()
-                    // Persist synchronously so the next derivePrfSeed call
-                    // sees the new ID in allowCredentialIds and iOS auto-routes
-                    // to the registering provider instead of showing a picker.
-                    KnownCredentialsStore.add(credentialId: credentialIdBase64, rpId: rpId)
-                    if let aaguid = registered.aaguid, aaguid == Self.gpmAaguid {
-                        await graceTracker.arm(after: Self.postCreateGraceTotal)
-                    }
-                    call.resolve([
-                        "credentialId": credentialIdBase64,
-                        "aaguid": registered.aaguid?.base64EncodedString() as Any,
-                        "backupEligible": registered.backupEligible as Any,
-                    ])
-                } catch {
-                    call.reject(error.localizedDescription, errorCode(error))
+    @objc func connectWithPasskey(_ call: CAPPluginCall) {
+        guard let c = client else {
+            call.reject("Plugin not initialized", "NOT_INITIALIZED")
+            return
+        }
+        let request = ConnectWithPasskeyRequest(
+            label: call.getString("label"),
+            allowCredentials: parseB64Array(call, key: "allowCredentials"),
+            excludeCredentials: parseB64Array(call, key: "excludeCredentials")
+        )
+        Task {
+            do {
+                let response = try await c.connectWithPasskey(request: request)
+                var out: [String: Any] = [
+                    "wallet": Self.encodeWallet(response.wallet),
+                ]
+                if let cred = response.registeredCredential {
+                    out["registeredCredential"] = Self.encodeCredential(cred)
+                } else {
+                    out["registeredCredential"] = NSNull()
                 }
+                call.resolve(out)
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
             }
-        } else {
-            call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+        }
+    }
+
+    @objc func listLabels(_ call: CAPPluginCall) {
+        guard let c = client else {
+            call.reject("Plugin not initialized", "NOT_INITIALIZED")
+            return
+        }
+        Task {
+            do {
+                call.resolve(["labels": try await c.labels().list()])
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
+        }
+    }
+
+    @objc func storeLabel(_ call: CAPPluginCall) {
+        guard let label = call.getString("label") else {
+            call.reject("Missing required parameter: label", "INVALID_ARGUMENT")
+            return
+        }
+        guard let c = client else {
+            call.reject("Plugin not initialized", "NOT_INITIALIZED")
+            return
+        }
+        Task {
+            do {
+                try await c.labels().store(label: label)
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
         }
     }
 
     @objc func getKnownCredentialIds(_ call: CAPPluginCall) {
-        if #available(iOS 18.0, *) {
-            let rpId = call.getString("rpId") ?? "keys.breez.technology"
-            let ids = KnownCredentialsStore.read(rpId: rpId)
-            call.resolve(["credentialIds": ids])
-        } else {
+        guard let c = client else {
             call.resolve(["credentialIds": [String]()])
+            return
+        }
+        Task {
+            do {
+                let ids = try await c.credentials().get()
+                call.resolve(["credentialIds": ids.map { $0.base64EncodedString() }])
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
+        }
+    }
+
+    @objc func removeKnownCredentialId(_ call: CAPPluginCall) {
+        guard let idString = call.getString("credentialId"), !idString.isEmpty,
+              let id = Data(base64Encoded: idString) else {
+            call.reject("Missing or invalid credentialId", "INVALID_ARGUMENT")
+            return
+        }
+        guard let c = client else {
+            call.resolve()
+            return
+        }
+        Task {
+            do {
+                try await c.credentials().remove(credentialId: id)
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
+            }
         }
     }
 
     @objc func clearKnownCredentialIds(_ call: CAPPluginCall) {
-        if #available(iOS 18.0, *) {
-            let rpId = call.getString("rpId") ?? "keys.breez.technology"
-            KnownCredentialsStore.clear(rpId: rpId)
-        }
-        call.resolve()
-    }
-
-    @objc func removeKnownCredentialId(_ call: CAPPluginCall) {
-        guard let credentialId = call.getString("credentialId"), !credentialId.isEmpty else {
-            call.reject("Missing required parameter: credentialId", "INVALID_ARGUMENT")
+        guard let c = client else {
+            call.resolve()
             return
         }
-        if #available(iOS 18.0, *) {
-            let rpId = call.getString("rpId") ?? "keys.breez.technology"
-            KnownCredentialsStore.remove(credentialId: credentialId, rpId: rpId)
-        }
-        call.resolve()
-    }
-
-    @objc func derivePrfSeed(_ call: CAPPluginCall) {
-        guard let salt = call.getString("salt") else {
-            call.reject("Missing required parameter: salt", "INVALID_ARGUMENT")
-            return
-        }
-
-        if #available(iOS 18.0, *) {
-            let provider = makeProvider(call)
-            // Capture the asserted credential ID so the result can carry
-            // it back to JS. The plugin caller (glow-web) uses this to
-            // update per-cred metadata (last-sign-in timestamp, active
-            // cred pin) on every successful sign-in, mirroring the web
-            // SDK's onAssertionCredentialId path. Wraps the existing
-            // KnownCredentialsStore.add callback set in makeProvider.
-            let credIdBox = AssertedCredIdBox()
-            let originalCallback = provider.onAssertionCredentialId
-            provider.onAssertionCredentialId = { credentialId in
-                credIdBox.set(credentialId.base64EncodedString())
-                originalCallback?(credentialId)
+        Task {
+            do {
+                try await c.credentials().clear()
+                call.resolve()
+            } catch {
+                call.reject(error.localizedDescription, errorCode(error))
             }
-            Task {
-                do {
-                    await graceTracker.consume()
-                    let seedData = try await provider.derivePrfSeed(salt: salt)
-                    let credIdValue: Any = credIdBox.get() ?? NSNull()
-                    call.resolve([
-                        "seed": seedData.base64EncodedString(),
-                        "credentialId": credIdValue,
-                    ])
-                } catch {
-                    call.reject(error.localizedDescription, errorCode(error))
-                }
-            }
-        } else {
-            call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
         }
     }
 
-    @objc func derivePrfSeeds(_ call: CAPPluginCall) {
-        guard let salts = call.getArray("salts", String.self), !salts.isEmpty else {
-            call.reject("Missing or empty required parameter: salts", "INVALID_ARGUMENT")
-            return
-        }
+    private func parseB64Array(_ call: CAPPluginCall, key: String) -> [Data] {
+        (call.getArray(key) as? [String] ?? []).compactMap { Data(base64Encoded: $0) }
+    }
 
-        if #available(iOS 18.0, *) {
-            let provider = makeProvider(call)
-            // See derivePrfSeed: capture the asserted credentialId for
-            // the response so glow-web can keep per-cred metadata in
-            // sync. Bulk PRF runs one assertion per pair of salts, but
-            // they all share the same credential, so a single credId
-            // covers the whole batch.
-            let credIdBox = AssertedCredIdBox()
-            let originalCallback = provider.onAssertionCredentialId
-            provider.onAssertionCredentialId = { credentialId in
-                credIdBox.set(credentialId.base64EncodedString())
-                originalCallback?(credentialId)
-            }
-            Task {
-                do {
-                    await graceTracker.consume()
-                    let outputs = try await provider.derivePrfSeeds(salts: salts)
-                    let base64 = outputs.map { $0.base64EncodedString() }
-                    let credIdValue: Any = credIdBox.get() ?? NSNull()
-                    call.resolve([
-                        "seeds": base64,
-                        "credentialId": credIdValue,
-                    ])
-                } catch {
-                    call.reject(error.localizedDescription, errorCode(error))
-                }
-            }
-        } else {
-            call.reject("Passkey PRF requires iOS 18.0+", "PRF_NOT_SUPPORTED")
+    private static func encodeWallet(_ wallet: Wallet) -> [String: Any] {
+        return [
+            "seed": encodeSeed(wallet.seed),
+            "label": wallet.label,
+        ]
+    }
+
+    private static func encodeSeed(_ seed: Seed) -> [String: Any] {
+        switch seed {
+        case .mnemonic(let mnemonic, let passphrase):
+            var out: [String: Any] = ["type": "mnemonic", "mnemonic": mnemonic]
+            out["passphrase"] = passphrase ?? NSNull()
+            return out
+        case .entropy(let data):
+            return ["type": "entropy", "entropy": data.base64EncodedString()]
         }
     }
 
-    @objc func checkDomainAssociation(_ call: CAPPluginCall) {
-        if #available(iOS 18.0, *) {
-            let provider = makeProvider(call)
-            Task {
-                do {
-                    let result = try await provider.checkDomainAssociation()
-                    call.resolve(Self.domainAssociationToDict(result))
-                } catch {
-                    // The SDK's checkDomainAssociation is documented to never
-                    // throw — it maps verification-level failures to .skipped.
-                    // Still, catch defensively so a future change in the SDK
-                    // contract doesn't crash the bridge.
-                    call.reject(error.localizedDescription, errorCode(error))
-                }
-            }
-        } else {
-            // Passkey PRF itself requires iOS 18+; on older iOS the app
-            // will never reach this code path. Return Skipped to preserve
-            // API parity if some caller probes anyway.
-            call.resolve([
-                "kind": "Skipped",
-                "reason": "iOS version below 18.0; passkey PRF is unsupported"
-            ])
-        }
+    private static func encodeCredential(_ cred: RegisteredCredential) -> [String: Any] {
+        var out: [String: Any] = [
+            "credentialId": cred.credentialId.base64EncodedString(),
+            "userId": cred.userId.base64EncodedString(),
+        ]
+        out["aaguid"] = cred.aaguid?.base64EncodedString() ?? NSNull()
+        out["backupEligible"] = cred.backupEligible ?? NSNull()
+        return out
     }
 
-    /// Serialize a `DomainAssociation` enum into the JSON-shaped dict the
-    /// Capacitor bridge expects. Mirrors the TypeScript `DomainAssociation`
-    /// tagged-union one-to-one.
-    @available(iOS 18.0, *)
-    private static func domainAssociationToDict(
-        _ result: DomainAssociation
-    ) -> [String: Any] {
-        switch result {
-        case .associated:
-            return ["kind": "Associated"]
+    private static func encodeAvailability(_ a: PasskeyAvailability) -> [String: Any] {
+        switch a {
+        case .available: return ["type": "available"]
+        case .prfUnsupported: return ["type": "prfUnsupported"]
         case .notAssociated(let source, let reason):
-            return [
-                "kind": "NotAssociated",
-                "source": source,
-                "reason": reason,
-            ]
+            return ["type": "notAssociated", "source": source, "reason": reason]
         case .skipped(let reason):
-            return [
-                "kind": "Skipped",
-                "reason": reason,
-            ]
-        }
-    }
-
-    @available(iOS 18.0, *)
-    private func makeProvider(_ call: CAPPluginCall) -> PasskeyProvider {
-        let rpId = call.getString("rpId") ?? "keys.breez.technology"
-        // Caller-supplied allowCredentialIds let glow-web pin follow-up
-        // sign-in derives (listLabels, saveLabel, label switch) to the
-        // active cred so iOS auto-picks via
-        // preferImmediatelyAvailableCredentials when only one matches.
-        // Empty / absent → fully discoverable (initial sign-in).
-        let allowedIds: [Data] = (call.getArray("allowCredentialIds") as? [String] ?? [])
-            .compactMap { Data(base64Encoded: $0) }
-        let provider = PasskeyProvider(
-            rpId: rpId,
-            rpName: call.getString("rpName") ?? "Glow",
-            userName: call.getString("userName"),
-            userDisplayName: call.getString("userDisplayName"),
-            autoRegister: call.getBool("autoRegister") ?? true,
-            allowCredentialIds: allowedIds
-        )
-        // Capture-on-sign-in: every time the user successfully asserts
-        // with a passkey we don't already track, append it to the
-        // synced keychain. Migrates users whose passkey predates our
-        // tracking (e.g. installed an older Glow version that didn't
-        // write KnownCredentialsStore entries) — after their first
-        // sign-in here, future create attempts hit the platform-level
-        // "already exists" refusal correctly.
-        provider.onAssertionCredentialId = { credentialId in
-            let base64 = credentialId.base64EncodedString()
-            // Detach: this callback fires inside the assertion delegate
-            // which then resumes the continuation that drives the JS
-            // promise. A blocking Keychain write here is on the
-            // user-perceived critical path. Add() is idempotent so
-            // ordering against subsequent calls doesn't matter.
-            Task.detached(priority: .utility) {
-                KnownCredentialsStore.add(credentialId: base64, rpId: rpId)
-            }
-        }
-        return provider
-    }
-
-    /// Tiny reference holder for the credentialId captured during a
-    /// derive ceremony. The SDK's `onAssertionCredentialId` closure
-    /// fires synchronously inside the assertion delegate, before the
-    /// awaiting Task resumes from `derivePrfSeed(salt:)`. Using a
-    /// reference type avoids the value-semantics gotcha of capturing
-    /// a `var` from an escaping closure, and the explicit lock keeps
-    /// the read+write atomic if the SDK ever moves the callback off
-    /// the assertion thread.
-    private final class AssertedCredIdBox {
-        private let lock = NSLock()
-        private var _value: String?
-        func set(_ value: String) {
-            lock.lock(); defer { lock.unlock() }
-            _value = value
-        }
-        func get() -> String? {
-            lock.lock(); defer { lock.unlock() }
-            return _value
+            return ["type": "skipped", "reason": reason]
         }
     }
 
     private func errorCode(_ error: Error) -> String {
-        guard let prfError = error as? PasskeyPrfError else { return "UNKNOWN_ERROR" }
-        switch prfError {
+        if let passkey = error as? PasskeyError {
+            if case .Prf(let inner) = passkey { return prfErrorCode(inner) }
+            switch passkey {
+            case .Prf: return "GENERIC_ERROR"  // unreachable; handled above
+            case .RelayConnectionFailed: return "RELAY_CONNECTION_FAILED"
+            case .NostrWriteFailed: return "NOSTR_WRITE_FAILED"
+            case .NostrReadFailed: return "NOSTR_READ_FAILED"
+            case .KeyDerivationError: return "KEY_DERIVATION_ERROR"
+            case .InvalidPrfOutput: return "INVALID_PRF_OUTPUT"
+            case .MnemonicError: return "MNEMONIC_ERROR"
+            case .InvalidSalt: return "INVALID_SALT"
+            case .Generic: return "GENERIC_ERROR"
+            }
+        }
+        if let prf = error as? PrfProviderError { return prfErrorCode(prf) }
+        return "UNKNOWN_ERROR"
+    }
+
+    private func prfErrorCode(_ prf: PrfProviderError) -> String {
+        switch prf {
         case .PrfNotSupported: return "PRF_NOT_SUPPORTED"
         case .UserCancelled: return "USER_CANCELLED"
+        case .UserTimedOut: return "USER_TIMED_OUT"
         case .CredentialNotFound: return "CREDENTIAL_NOT_FOUND"
         case .AuthenticationFailed: return "AUTHENTICATION_FAILED"
         case .PrfEvaluationFailed: return "PRF_EVALUATION_FAILED"

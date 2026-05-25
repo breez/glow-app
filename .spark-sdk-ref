@@ -1,16 +1,20 @@
 # Pinned spark-sdk commit that glow-app's build pipeline expects.
 #
-# The branch reference below is documentation only — CI checks out
+# The branch reference below is documentation only. CI checks out
 # the SHA directly. When you need to move glow-app onto a newer
 # spark-sdk commit, update the SHA on the last non-comment line
 # and commit the change. scripts/resolve-spark-sdk.sh reads only
 # the first non-comment, non-blank line as the SHA.
 #
-# Branch: proto/passkey-web-ux (breez/spark-sdk). Exploratory:
-#   wasm-side signalRename / signalCurrentUserDetails surface
-#   with defaultTimeoutMs ctor and explicit attestation: 'none',
-#   feeding the matching glow-web passkey provider hardening.
-#   Promote / merge alongside the corresponding glow-app + glow-web
-#   branches once UX validation is done.
-# Last verified: 2026-05-07.
-68d35180cdac201ed9e723efe387a88de5ec9125
+# Branch: 0.15.0-passkey-api-reduction (breez/spark-sdk). The
+#   passkey/api-reduction work rebased onto the 0.15.0 release
+#   tag, mirroring the 0.X.0-passkey-<variant> pattern used by
+#   prior backport branches (0.14.0-passkey-web-ux,
+#   0.15.0-passkey-web-ux). Same passkey surface as
+#   passkey/api-reduction (checkAvailability + labels() /
+#   credentials() sub-objects, connect_with_passkey unified
+#   onboarding, per-call DeriveSeedsRequest, etc.) but with the
+#   0.15.0 SDK base (token configs, shared http client, session
+#   manager removed from Flutter binding, etc.).
+# Last verified: 2026-05-23.
+8f158631247460dd45ac63df19258b5652939e32
