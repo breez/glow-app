@@ -1,13 +1,13 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 import PackageDescription
 
-// Local path to Spark SDK Swift package (pr/passkey-core branch).
-// Replace with published package URL once SDK PR #781 merges.
+// Local path to the Spark SDK Swift package. Pinned to the SHA in
+// glow-app's `.spark-sdk-ref`; rebuild via `make sdk-ios`.
 let sdkPath = "../../../spark-sdk/crates/breez-sdk/bindings/langs/swift"
 
 let package = Package(
     name: "CapacitorPasskeyPrf",
-    platforms: [.iOS(.v15)],
+    platforms: [.iOS(.v15), .macOS(.v15)],
     products: [
         .library(name: "CapacitorPasskeyPrf", targets: ["CapacitorPasskeyPrf"])
     ],
@@ -23,7 +23,13 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm"),
             ],
-            path: "ios/Sources/CapacitorPasskeyPrf"
+            path: "ios/Sources/CapacitorPasskeyPrf",
+            // Capacitor's CAPPluginCall isn't Sendable, so the standard
+            // `Task { call.resolve() }` bridge pattern trips Swift 6
+            // strict concurrency. Pin the language mode to v5 (matching
+            // the capacitor-native-vault plugin); tools 6.0 stays only
+            // for the .macOS(.v15) platform API.
+            swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]
 )

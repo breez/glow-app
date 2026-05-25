@@ -1,8 +1,8 @@
 package technology.breez.glow.passkeyprf
 
 import android.app.Activity
-import android.os.Build
 import android.util.Base64
+import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -11,336 +11,325 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import technology.breez.spark.passkey.PasskeyProvider
-import breez_sdk_spark.DomainAssociation
-import breez_sdk_spark.PasskeyPrfException
+import breez_sdk_spark.ConnectWithPasskeyRequest
+import breez_sdk_spark.PasskeyAvailability
+import breez_sdk_spark.PasskeyClient
+import breez_sdk_spark.PasskeyConfig
+import breez_sdk_spark.PasskeyException
+import breez_sdk_spark.PrfProviderException
+import breez_sdk_spark.RegisterRequest
+import breez_sdk_spark.RegisteredCredential
+import breez_sdk_spark.Seed
+import breez_sdk_spark.SignInRequest
+import breez_sdk_spark.Wallet
 
-@CapacitorPlugin(name = "PasskeyPrf")
-class PasskeyPrfPlugin : Plugin() {
-
+/**
+ * Capacitor bridge over `breez_sdk_spark.PasskeyClient`.
+ *
+ * Owns a single `PasskeyClient` per session (built in `initialize`)
+ * plus a process-lifetime `BlockStoreCredentialRegistry` so the SDK
+ * can auto-merge known credential IDs on every ceremony.
+ */
+@CapacitorPlugin(name = "Passkey")
+class PasskeyPlugin : Plugin() {
     private val scope = CoroutineScope(Dispatchers.Main)
 
-    /**
-     * Deadline for the GPM indexing grace period that follows
-     * registration on Android <14. The next assertion sleeps until
-     * this passes, then clears it.
-     */
+    private val registry: BlockStoreCredentialRegistry by lazy {
+        BlockStoreCredentialRegistry(context.applicationContext)
+    }
+
     @Volatile
-    private var postCreateGraceDeadlineMs: Long = 0L
+    private var client: PasskeyClient? = null
 
     @PluginMethod
-    fun isPrfAvailable(call: PluginCall) {
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
-        scope.launch {
-            try {
-                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
-                val available = provider.isPrfAvailable()
-                val ret = JSObject()
-                ret.put("available", available)
-                call.resolve(ret)
-            } catch (e: Exception) {
-                call.reject(e.message ?: "Unknown error", errorCode(e))
-            }
-        }
-    }
-
-    @PluginMethod
-    fun createPasskey(call: PluginCall) {
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
-
-        // Merge caller-supplied IDs with the synced registry so the
-        // platform's duplicate refusal triggers on either source.
-        val callerExcludeIds = call.getArray("excludeCredentialIds")
-            ?.toList<String>()
-            ?: emptyList()
-
-        scope.launch {
-            try {
-                val storeIds = KnownCredentialsStore.read(context, rpId)
-                val seen = LinkedHashSet<String>()
-                val merged = ArrayList<String>()
-                for (id in callerExcludeIds) if (seen.add(id)) merged.add(id)
-                for (id in storeIds) if (seen.add(id)) merged.add(id)
-                val excludeBytes = merged.mapNotNull { id ->
-                    try {
-                        Base64.decode(id, Base64.NO_WRAP)
-                    } catch (_: IllegalArgumentException) {
-                        null
-                    }
-                }
-
-                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
-                val registered = provider.createPasskey(excludeBytes)
-                val credentialIdBase64 = Base64.encodeToString(registered.credentialId, Base64.NO_WRAP)
-
-                // Sync local write so the next assertion sees the new ID.
-                try {
-                    KnownCredentialsStore.addLocal(context, credentialIdBase64, rpId)
-                } catch (_: Exception) {
-                }
-
-                scope.launch {
-                    try {
-                        KnownCredentialsStore.syncBlockStore(context, rpId)
-                    } catch (_: Exception) {
-                    }
-                }
-
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    postCreateGraceDeadlineMs =
-                        System.currentTimeMillis() + POST_CREATE_GRACE_TOTAL_MS
-                }
-
-                val ret = JSObject()
-                ret.put("credentialId", credentialIdBase64)
-                ret.put(
-                    "aaguid",
-                    registered.aaguid?.let { Base64.encodeToString(it, Base64.NO_WRAP) },
-                )
-                ret.put("backupEligible", registered.backupEligible)
-                call.resolve(ret)
-            } catch (e: Exception) {
-                call.reject(e.message ?: "Passkey creation failed", errorCode(e))
-            }
-        }
-    }
-
-    @PluginMethod
-    fun derivePrfSeed(call: PluginCall) {
-        val salt = call.getString("salt")
-        if (salt == null) {
-            call.reject("Missing required parameter: salt", "INVALID_ARGUMENT")
+    fun initialize(call: PluginCall) {
+        val rpId = call.getString("rpId")
+        val rpName = call.getString("rpName")
+        if (rpId == null || rpName == null) {
+            call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
             return
         }
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+        val provider = PasskeyProvider(
+            activityProvider = { activity as Activity },
+            rpId = rpId,
+            rpName = rpName,
+            userName = call.getString("userName"),
+            userDisplayName = call.getString("userDisplayName"),
+            credentialRegistry = registry,
+            onRegistryError = { op, err -> Log.w(TAG, "Registry $op failed: ${err.message}") },
+        )
+        val config = call.getString("defaultLabel")?.let { PasskeyConfig(defaultLabel = it) }
+        client = PasskeyClient(
+            prfProvider = provider,
+            breezApiKey = call.getString("breezApiKey"),
+            config = config,
+        )
+        call.resolve()
+    }
 
+    @PluginMethod
+    fun checkAvailability(call: PluginCall) {
+        val c = client ?: run {
+            call.resolve(JSObject().put("type", "prfUnsupported"))
+            return
+        }
         scope.launch {
             try {
-                awaitPostCreateGracePeriod()
-
-                // Caller-supplied allowCredentialIds pin the assertion
-                // to the active cred (post-sign-in derives like
-                // listLabels / saveLabel / label switch). Empty /
-                // absent → fully discoverable (initial sign-in).
-                val callerAllowIds = call.getArray("allowCredentialIds")
-                    ?.toList<String>()
-                    ?: emptyList()
-                val allowBytes = callerAllowIds.mapNotNull { id ->
-                    try { Base64.decode(id, Base64.NO_WRAP) }
-                    catch (_: IllegalArgumentException) { null }
-                }
-                val provider = makeProvider(call, rpId, allowCredentialIds = allowBytes)
-
-                // Capture asserted IDs so KnownCredentialsStore stays
-                // populated for excludeCredentialIds use on subsequent
-                // creates, AND so we can return the credential ID in
-                // the response. glow-web reads the returned credId to
-                // update per-cred metadata (last-sign-in timestamp,
-                // active cred pin) on every successful sign-in.
-                val credIdRef = java.util.concurrent.atomic.AtomicReference<String?>()
-                provider.onAssertionCredentialId = { credentialId ->
-                    val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
-                    credIdRef.set(base64)
-                    scope.launch {
-                        try {
-                            KnownCredentialsStore.add(context, base64, rpId)
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-
-                val seedBytes = provider.derivePrfSeed(salt)
-                val ret = JSObject()
-                ret.put("seed", Base64.encodeToString(seedBytes, Base64.NO_WRAP))
-                ret.put("credentialId", credIdRef.get())
-                call.resolve(ret)
+                call.resolve(encodeAvailability(c.checkAvailability()))
             } catch (e: Exception) {
-                call.reject(e.message ?: "PRF seed derivation failed", errorCode(e))
+                call.reject(e.message ?: "checkAvailability failed", errorCode(e))
             }
         }
     }
 
     @PluginMethod
-    fun derivePrfSeeds(call: PluginCall) {
-        val saltsArr = call.getArray("salts")
-        if (saltsArr == null || saltsArr.length() == 0) {
-            call.reject("Missing or empty required parameter: salts", "INVALID_ARGUMENT")
-            return
-        }
-        val salts: List<String> = saltsArr.toList<String>()
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
-
+    fun register(call: PluginCall) {
+        val c = requireClient(call) ?: return
+        val request = RegisterRequest(
+            label = call.getString("label"),
+            excludeCredentials = parseB64Array(call, "excludeCredentials"),
+        )
         scope.launch {
             try {
-                awaitPostCreateGracePeriod()
-
-                // See derivePrfSeed — caller-supplied allowCredentialIds pin
-                // active cred; empty / absent is fully discoverable.
-                val callerAllowIds = call.getArray("allowCredentialIds")
-                    ?.toList<String>()
-                    ?: emptyList()
-                val allowBytes = callerAllowIds.mapNotNull { id ->
-                    try { Base64.decode(id, Base64.NO_WRAP) }
-                    catch (_: IllegalArgumentException) { null }
-                }
-                val provider = makeProvider(call, rpId, allowCredentialIds = allowBytes)
-                // See derivePrfSeed: capture for both KnownCredentialsStore
-                // population AND the response credId field. Bulk PRF runs
-                // a single assertion per pair, but every salt resolves
-                // against the same credential, so one credId covers the
-                // whole batch.
-                val credIdRef = java.util.concurrent.atomic.AtomicReference<String?>()
-                provider.onAssertionCredentialId = { credentialId ->
-                    val base64 = Base64.encodeToString(credentialId, Base64.NO_WRAP)
-                    credIdRef.set(base64)
-                    scope.launch {
-                        try {
-                            KnownCredentialsStore.add(context, base64, rpId)
-                        } catch (_: Exception) {
-                        }
-                    }
-                }
-
-                val seedBytesList = provider.derivePrfSeeds(salts)
-                val seedsBase64 = JSArray()
-                for (bytes in seedBytesList) {
-                    seedsBase64.put(Base64.encodeToString(bytes, Base64.NO_WRAP))
-                }
-                val ret = JSObject()
-                ret.put("seeds", seedsBase64)
-                ret.put("credentialId", credIdRef.get())
-                call.resolve(ret)
+                val response = c.register(request)
+                call.resolve(JSObject().apply {
+                    put("wallet", encodeWallet(response.wallet))
+                    put("credential", encodeCredential(response.credential))
+                })
             } catch (e: Exception) {
-                call.reject(e.message ?: "Bulk PRF seed derivation failed", errorCode(e))
+                call.reject(e.message ?: "register failed", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun signIn(call: PluginCall) {
+        val c = requireClient(call) ?: return
+        val request = SignInRequest(
+            label = call.getString("label"),
+            allowCredentials = parseB64Array(call, "allowCredentials"),
+            preferImmediatelyAvailableCredentials = call.getBoolean("preferImmediatelyAvailableCredentials"),
+        )
+        scope.launch {
+            try {
+                val response = c.signIn(request)
+                call.resolve(JSObject().apply {
+                    put("wallet", encodeWallet(response.wallet))
+                    put("labels", JSArray(response.labels))
+                    put("credentialId", response.credentialId?.let { encodeB64(it) })
+                })
+            } catch (e: Exception) {
+                call.reject(e.message ?: "signIn failed", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun connectWithPasskey(call: PluginCall) {
+        val c = requireClient(call) ?: return
+        val request = ConnectWithPasskeyRequest(
+            label = call.getString("label"),
+            allowCredentials = parseB64Array(call, "allowCredentials"),
+            excludeCredentials = parseB64Array(call, "excludeCredentials"),
+        )
+        scope.launch {
+            try {
+                val response = c.connectWithPasskey(request)
+                call.resolve(JSObject().apply {
+                    put("wallet", encodeWallet(response.wallet))
+                    put("registeredCredential", response.registeredCredential?.let { encodeCredential(it) })
+                })
+            } catch (e: Exception) {
+                call.reject(e.message ?: "connectWithPasskey failed", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun listLabels(call: PluginCall) {
+        val c = requireClient(call) ?: return
+        scope.launch {
+            try {
+                call.resolve(JSObject().put("labels", JSArray(c.labels().list())))
+            } catch (e: Exception) {
+                call.reject(e.message ?: "listLabels failed", errorCode(e))
+            }
+        }
+    }
+
+    @PluginMethod
+    fun storeLabel(call: PluginCall) {
+        val label = call.getString("label") ?: run {
+            call.reject("Missing required parameter: label", "INVALID_ARGUMENT")
+            return
+        }
+        val c = requireClient(call) ?: return
+        scope.launch {
+            try {
+                c.labels().store(label)
+                call.resolve()
+            } catch (e: Exception) {
+                call.reject(e.message ?: "storeLabel failed", errorCode(e))
             }
         }
     }
 
     @PluginMethod
     fun getKnownCredentialIds(call: PluginCall) {
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
-        scope.launch {
-            try {
-                val ids = KnownCredentialsStore.read(context, rpId)
-                val ret = JSObject()
-                val arr = JSArray()
-                for (id in ids) arr.put(id)
-                ret.put("credentialIds", arr)
-                call.resolve(ret)
-            } catch (e: Exception) {
-                call.reject(e.message ?: "Failed to read known credentials", errorCode(e))
-            }
+        val c = client ?: run {
+            call.resolve(JSObject().put("credentialIds", JSArray()))
+            return
         }
-    }
-
-    @PluginMethod
-    fun clearKnownCredentialIds(call: PluginCall) {
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
         scope.launch {
             try {
-                KnownCredentialsStore.clear(context, rpId)
-                call.resolve()
+                val ids = c.credentials().get()
+                val arr = JSArray().apply { ids.forEach { put(encodeB64(it)) } }
+                call.resolve(JSObject().put("credentialIds", arr))
             } catch (e: Exception) {
-                call.reject(e.message ?: "Failed to clear known credentials", errorCode(e))
+                call.reject(e.message ?: "getKnownCredentialIds failed", errorCode(e))
             }
         }
     }
 
     @PluginMethod
     fun removeKnownCredentialId(call: PluginCall) {
-        val credentialId = call.getString("credentialId")
-        if (credentialId.isNullOrEmpty()) {
+        val raw = call.getString("credentialId")
+        if (raw.isNullOrEmpty()) {
             call.reject("Missing required parameter: credentialId", "INVALID_ARGUMENT")
             return
         }
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+        val decoded = decodeB64Either(raw)
+        if (decoded == null) {
+            call.reject("credentialId is not valid base64", "INVALID_ARGUMENT")
+            return
+        }
+        val c = client ?: run {
+            call.resolve()
+            return
+        }
         scope.launch {
             try {
-                KnownCredentialsStore.remove(context, credentialId, rpId)
+                c.credentials().remove(decoded)
                 call.resolve()
             } catch (e: Exception) {
-                call.reject(e.message ?: "Failed to remove known credential", errorCode(e))
+                call.reject(e.message ?: "removeKnownCredentialId failed", errorCode(e))
             }
         }
     }
 
     @PluginMethod
-    fun checkDomainAssociation(call: PluginCall) {
-        val rpId = call.getString("rpId") ?: DEFAULT_RP_ID
+    fun clearKnownCredentialIds(call: PluginCall) {
+        val c = client ?: run {
+            call.resolve()
+            return
+        }
         scope.launch {
             try {
-                val provider = makeProvider(call, rpId, allowCredentialIds = emptyList())
-                val result = provider.checkDomainAssociation()
-                call.resolve(domainAssociationToJson(result))
+                c.credentials().clear()
+                call.resolve()
             } catch (e: Exception) {
-                // SDK contract says it never throws (failures are .Skipped),
-                // but catch defensively.
-                call.reject(e.message ?: "Domain association check failed", errorCode(e))
+                call.reject(e.message ?: "clearKnownCredentialIds failed", errorCode(e))
             }
         }
     }
 
-    private fun domainAssociationToJson(result: DomainAssociation): JSObject {
-        val ret = JSObject()
-        when (result) {
-            is DomainAssociation.Associated -> {
-                ret.put("kind", "Associated")
-            }
-            is DomainAssociation.NotAssociated -> {
-                ret.put("kind", "NotAssociated")
-                ret.put("source", result.source)
-                ret.put("reason", result.reason)
-            }
-            is DomainAssociation.Skipped -> {
-                ret.put("kind", "Skipped")
-                ret.put("reason", result.reason)
-            }
+    private fun requireClient(call: PluginCall): PasskeyClient? {
+        val c = client
+        if (c == null) call.reject("Plugin not initialized", "NOT_INITIALIZED")
+        return c
+    }
+
+    private fun parseB64Array(call: PluginCall, key: String): List<ByteArray> {
+        val raw = call.getArray(key)?.toList<String>() ?: return emptyList()
+        return raw.mapNotNull { decodeB64Either(it) }
+    }
+
+    private fun encodeB64(bytes: ByteArray): String =
+        Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+    private fun decodeB64Either(input: String): ByteArray? {
+        listOf(
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+            Base64.URL_SAFE or Base64.NO_WRAP,
+            Base64.NO_WRAP,
+            Base64.NO_WRAP or Base64.NO_PADDING,
+        ).forEach { flags ->
+            try { return Base64.decode(input, flags) }
+            catch (_: IllegalArgumentException) { /* try next */ }
         }
-        return ret
+        return null
     }
 
-    private suspend fun awaitPostCreateGracePeriod() {
-        val deadline = postCreateGraceDeadlineMs
-        if (deadline == 0L) return
-        val remaining = deadline - System.currentTimeMillis()
-        postCreateGraceDeadlineMs = 0L
-        if (remaining > 0) delay(remaining)
+    private fun encodeWallet(wallet: Wallet): JSObject =
+        JSObject().apply {
+            put("seed", encodeSeed(wallet.seed))
+            put("label", wallet.label)
+        }
+
+    private fun encodeSeed(seed: Seed): JSObject = when (seed) {
+        is Seed.Mnemonic -> JSObject().apply {
+            put("type", "mnemonic")
+            put("mnemonic", seed.mnemonic)
+            put("passphrase", seed.passphrase)
+        }
+        is Seed.Entropy -> JSObject().apply {
+            put("type", "entropy")
+            put("entropy", encodeB64(seed.v1))
+        }
     }
 
-    private fun makeProvider(
-        call: PluginCall,
-        rpId: String,
-        allowCredentialIds: List<ByteArray>,
-    ): PasskeyProvider {
-        return PasskeyProvider(
-            activityProvider = { activity as Activity },
-            rpId = rpId,
-            rpName = call.getString("rpName") ?: "Glow",
-            userName = call.getString("userName"),
-            userDisplayName = call.getString("userDisplayName"),
-            autoRegister = call.getBoolean("autoRegister") ?: true,
-            allowCredentialIds = allowCredentialIds,
-        )
+    private fun encodeCredential(cred: RegisteredCredential): JSObject =
+        JSObject().apply {
+            put("credentialId", encodeB64(cred.credentialId))
+            put("userId", encodeB64(cred.userId))
+            put("aaguid", cred.aaguid?.let { encodeB64(it) })
+            put("backupEligible", cred.backupEligible)
+        }
+
+    private fun encodeAvailability(a: PasskeyAvailability): JSObject = when (a) {
+        is PasskeyAvailability.Available ->
+            JSObject().put("type", "available")
+        is PasskeyAvailability.PrfUnsupported ->
+            JSObject().put("type", "prfUnsupported")
+        is PasskeyAvailability.NotAssociated ->
+            JSObject().put("type", "notAssociated").put("source", a.source).put("reason", a.reason)
+        is PasskeyAvailability.Skipped ->
+            JSObject().put("type", "skipped").put("reason", a.reason)
     }
 
     private fun errorCode(e: Exception): String = when (e) {
-        is PasskeyPrfException.PrfNotSupported -> "PRF_NOT_SUPPORTED"
-        is PasskeyPrfException.UserCancelled -> "USER_CANCELLED"
-        is PasskeyPrfException.CredentialNotFound -> "CREDENTIAL_NOT_FOUND"
-        is PasskeyPrfException.AuthenticationFailed -> "AUTHENTICATION_FAILED"
-        is PasskeyPrfException.PrfEvaluationFailed -> "PRF_EVALUATION_FAILED"
-        is PasskeyPrfException.Configuration -> "CONFIGURATION_ERROR"
-        is PasskeyPrfException.CredentialAlreadyExists -> "CREDENTIAL_ALREADY_EXISTS"
-        is PasskeyPrfException.Generic -> "GENERIC_ERROR"
+        is PasskeyException -> passkeyErrorCode(e)
+        is PrfProviderException -> prfErrorCode(e)
         else -> "UNKNOWN_ERROR"
     }
 
-    companion object {
-        private const val DEFAULT_RP_ID = "keys.breez.technology"
+    private fun passkeyErrorCode(e: PasskeyException): String = when (e) {
+        is PasskeyException.Prf -> "GENERIC_ERROR"  // SDK wraps PrfProviderException; the typed one surfaces via `is PrfProviderException` above
+        is PasskeyException.RelayConnectionFailed -> "RELAY_CONNECTION_FAILED"
+        is PasskeyException.NostrWriteFailed -> "NOSTR_WRITE_FAILED"
+        is PasskeyException.NostrReadFailed -> "NOSTR_READ_FAILED"
+        is PasskeyException.KeyDerivationException -> "KEY_DERIVATION_ERROR"
+        is PasskeyException.InvalidPrfOutput -> "INVALID_PRF_OUTPUT"
+        is PasskeyException.MnemonicException -> "MNEMONIC_ERROR"
+        is PasskeyException.InvalidSalt -> "INVALID_SALT"
+        is PasskeyException.Generic -> "GENERIC_ERROR"
+    }
 
-        /** GPM indexing window after registration on Android <14. */
-        private const val POST_CREATE_GRACE_TOTAL_MS: Long = 800L
+    private fun prfErrorCode(e: PrfProviderException): String = when (e) {
+        is PrfProviderException.PrfNotSupported -> "PRF_NOT_SUPPORTED"
+        is PrfProviderException.UserCancelled -> "USER_CANCELLED"
+        is PrfProviderException.UserTimedOut -> "USER_TIMED_OUT"
+        is PrfProviderException.CredentialNotFound -> "CREDENTIAL_NOT_FOUND"
+        is PrfProviderException.AuthenticationFailed -> "AUTHENTICATION_FAILED"
+        is PrfProviderException.PrfEvaluationFailed -> "PRF_EVALUATION_FAILED"
+        is PrfProviderException.Configuration -> "CONFIGURATION_ERROR"
+        is PrfProviderException.CredentialAlreadyExists -> "CREDENTIAL_ALREADY_EXISTS"
+        is PrfProviderException.Generic -> "GENERIC_ERROR"
+    }
+
+    companion object {
+        private const val TAG = "PasskeyPlugin"
     }
 }
