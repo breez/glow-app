@@ -10,14 +10,11 @@ import com.google.android.gms.auth.blockstore.RetrieveBytesRequest
 import com.google.android.gms.auth.blockstore.StoreBytesData
 import kotlinx.coroutines.tasks.await
 import org.json.JSONArray
-import technology.breez.spark.passkey.core.CredentialRegistry
 
 /**
- * Plugin-side implementation of the SDK's [CredentialRegistry] interface,
- * providing cross-device sync via Google Block Store with a local
- * `SharedPreferences` fallback. Replaces the bundled `KnownCredentialsStore`
- * the SDK used to ship; the SDK now exposes only the contract and lets
- * each host bring its own backing store.
+ * Plugin-side store of known passkey credential IDs, providing
+ * cross-device sync via Google Block Store with a local
+ * `SharedPreferences` fallback.
  *
  * Block Store is the closest Android equivalent to iCloud Keychain:
  * Google-account synced, restored automatically on reinstall and across
@@ -25,12 +22,11 @@ import technology.breez.spark.passkey.core.CredentialRegistry
  * cases. Reads union both sources, writes go to both.
  *
  * Storage keys are kept stable (`breez.glow.knownCredentials.*`) so any
- * already-persisted entries from prior plugin versions remain readable
- * across the rename.
+ * already-persisted entries remain readable.
  */
 public class BlockStoreCredentialRegistry(
     private val context: Context,
-) : CredentialRegistry {
+) {
     private companion object {
         private const val TAG = "BlockStoreCredentialRegistry"
         private const val BLOCKSTORE_KEY_PREFIX = "breez.glow.knownCredentials."
@@ -43,7 +39,7 @@ public class BlockStoreCredentialRegistry(
     private fun encode(b: ByteArray): String = Base64.encodeToString(b, B64_FLAGS)
     private fun decode(s: String): ByteArray = Base64.decode(s, B64_FLAGS)
 
-    override suspend fun read(rpId: String): List<ByteArray> {
+    suspend fun read(rpId: String): List<ByteArray> {
         val seen = LinkedHashSet<String>()
         readFromBlockStore(rpId)?.forEach { seen.add(it) }
         readFromPrefs(rpId).forEach { seen.add(it) }
@@ -57,7 +53,7 @@ public class BlockStoreCredentialRegistry(
         }
     }
 
-    override suspend fun add(rpId: String, credentialId: ByteArray) {
+    suspend fun add(rpId: String, credentialId: ByteArray) {
         val encoded = encode(credentialId)
         val current = LinkedHashSet(readEncodedUnion(rpId))
         if (!current.add(encoded)) return
@@ -66,7 +62,7 @@ public class BlockStoreCredentialRegistry(
         writeToPrefs(rpId, payload)
     }
 
-    override suspend fun remove(rpId: String, credentialId: ByteArray) {
+    suspend fun remove(rpId: String, credentialId: ByteArray) {
         val encoded = encode(credentialId)
         val current = readEncodedUnion(rpId).toMutableList()
         if (!current.remove(encoded)) return
@@ -82,7 +78,7 @@ public class BlockStoreCredentialRegistry(
         }
     }
 
-    override suspend fun clear(rpId: String) {
+    suspend fun clear(rpId: String) {
         clearBlockStore(rpId)
         clearPrefs(rpId)
     }
