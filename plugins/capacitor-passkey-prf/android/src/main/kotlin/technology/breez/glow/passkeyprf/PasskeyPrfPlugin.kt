@@ -2,7 +2,6 @@ package technology.breez.glow.passkeyprf
 
 import android.app.Activity
 import android.util.Base64
-import android.util.Log
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -17,10 +16,10 @@ import breez_sdk_spark.ConnectWithPasskeyRequest
 import breez_sdk_spark.PasskeyAvailability
 import breez_sdk_spark.PasskeyClient
 import breez_sdk_spark.PasskeyConfig
+import breez_sdk_spark.PasskeyCredential
 import breez_sdk_spark.PasskeyException
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisterRequest
-import breez_sdk_spark.RegisteredCredential
 import breez_sdk_spark.Seed
 import breez_sdk_spark.SignInRequest
 import breez_sdk_spark.Wallet
@@ -29,8 +28,7 @@ import breez_sdk_spark.Wallet
  * Capacitor bridge over `breez_sdk_spark.PasskeyClient`.
  *
  * Owns a single `PasskeyClient` per session (built in `initialize`)
- * plus a process-lifetime `BlockStoreCredentialRegistry` so the SDK
- * can auto-merge known credential IDs on every ceremony.
+ * plus a process-lifetime `BlockStoreCredentialRegistry`.
  */
 @CapacitorPlugin(name = "Passkey")
 class PasskeyPlugin : Plugin() {
@@ -43,6 +41,10 @@ class PasskeyPlugin : Plugin() {
     @Volatile
     private var client: PasskeyClient? = null
 
+    // RP the client was initialized with; needed to key the registry.
+    @Volatile
+    private var rpId: String? = null
+
     @PluginMethod
     fun initialize(call: PluginCall) {
         val rpId = call.getString("rpId")
@@ -51,21 +53,16 @@ class PasskeyPlugin : Plugin() {
             call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
             return
         }
+        this.rpId = rpId
         val provider = PasskeyProvider(
             activityProvider = { activity as Activity },
             rpId = rpId,
             rpName = rpName,
             userName = call.getString("userName"),
             userDisplayName = call.getString("userDisplayName"),
-            credentialRegistry = registry,
-            onRegistryError = { op, err -> Log.w(TAG, "Registry $op failed: ${err.message}") },
         )
         val config = call.getString("defaultLabel")?.let { PasskeyConfig(defaultLabel = it) }
-        client = PasskeyClient(
-            prfProvider = provider,
-            breezApiKey = call.getString("breezApiKey"),
-            config = config,
-        )
+        client = PasskeyClient(provider, call.getString("breezApiKey"), config)
         call.resolve()
     }
 
@@ -94,9 +91,10 @@ class PasskeyPlugin : Plugin() {
         scope.launch {
             try {
                 val response = c.register(request)
+                recordCredential(response.credential)
                 call.resolve(JSObject().apply {
                     put("wallet", encodeWallet(response.wallet))
-                    put("credential", encodeCredential(response.credential))
+                    put("credential", response.credential?.let { encodeCredential(it) })
                 })
             } catch (e: Exception) {
                 call.reject(e.message ?: "register failed", errorCode(e))
@@ -115,10 +113,11 @@ class PasskeyPlugin : Plugin() {
         scope.launch {
             try {
                 val response = c.signIn(request)
+                recordCredential(response.credential)
                 call.resolve(JSObject().apply {
                     put("wallet", encodeWallet(response.wallet))
                     put("labels", JSArray(response.labels))
-                    put("credentialId", response.credentialId?.let { encodeB64(it) })
+                    put("credentialId", response.credential?.credentialId?.let { encodeB64(it) })
                 })
             } catch (e: Exception) {
                 call.reject(e.message ?: "signIn failed", errorCode(e))
@@ -137,9 +136,10 @@ class PasskeyPlugin : Plugin() {
         scope.launch {
             try {
                 val response = c.connectWithPasskey(request)
+                recordCredential(response.credential)
                 call.resolve(JSObject().apply {
                     put("wallet", encodeWallet(response.wallet))
-                    put("registeredCredential", response.registeredCredential?.let { encodeCredential(it) })
+                    put("registeredCredential", response.credential?.let { encodeCredential(it) })
                 })
             } catch (e: Exception) {
                 call.reject(e.message ?: "connectWithPasskey failed", errorCode(e))
@@ -178,13 +178,13 @@ class PasskeyPlugin : Plugin() {
 
     @PluginMethod
     fun getKnownCredentialIds(call: PluginCall) {
-        val c = client ?: run {
+        val rp = rpId ?: run {
             call.resolve(JSObject().put("credentialIds", JSArray()))
             return
         }
         scope.launch {
             try {
-                val ids = c.credentials().get()
+                val ids = registry.read(rp)
                 val arr = JSArray().apply { ids.forEach { put(encodeB64(it)) } }
                 call.resolve(JSObject().put("credentialIds", arr))
             } catch (e: Exception) {
@@ -205,13 +205,13 @@ class PasskeyPlugin : Plugin() {
             call.reject("credentialId is not valid base64", "INVALID_ARGUMENT")
             return
         }
-        val c = client ?: run {
+        val rp = rpId ?: run {
             call.resolve()
             return
         }
         scope.launch {
             try {
-                c.credentials().remove(decoded)
+                registry.remove(rp, decoded)
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "removeKnownCredentialId failed", errorCode(e))
@@ -221,17 +221,30 @@ class PasskeyPlugin : Plugin() {
 
     @PluginMethod
     fun clearKnownCredentialIds(call: PluginCall) {
-        val c = client ?: run {
+        val rp = rpId ?: run {
             call.resolve()
             return
         }
         scope.launch {
             try {
-                c.credentials().clear()
+                registry.clear(rp)
                 call.resolve()
             } catch (e: Exception) {
                 call.reject(e.message ?: "clearKnownCredentialIds failed", errorCode(e))
             }
+        }
+    }
+
+    /**
+     * Best-effort: record a credential ID in the synced store.
+     */
+    private suspend fun recordCredential(cred: PasskeyCredential?) {
+        val rp = rpId ?: return
+        if (cred == null) return
+        try {
+            registry.add(rp, cred.credentialId)
+        } catch (e: Exception) {
+            // Best-effort; a registry write failure must not fail the ceremony.
         }
     }
 
@@ -280,10 +293,10 @@ class PasskeyPlugin : Plugin() {
         }
     }
 
-    private fun encodeCredential(cred: RegisteredCredential): JSObject =
+    private fun encodeCredential(cred: PasskeyCredential): JSObject =
         JSObject().apply {
             put("credentialId", encodeB64(cred.credentialId))
-            put("userId", encodeB64(cred.userId))
+            put("userId", cred.userId?.let { encodeB64(it) })
             put("aaguid", cred.aaguid?.let { encodeB64(it) })
             put("backupEligible", cred.backupEligible)
         }
@@ -327,9 +340,5 @@ class PasskeyPlugin : Plugin() {
         is PrfProviderException.Configuration -> "CONFIGURATION_ERROR"
         is PrfProviderException.CredentialAlreadyExists -> "CREDENTIAL_ALREADY_EXISTS"
         is PrfProviderException.Generic -> "GENERIC_ERROR"
-    }
-
-    companion object {
-        private const val TAG = "PasskeyPlugin"
     }
 }

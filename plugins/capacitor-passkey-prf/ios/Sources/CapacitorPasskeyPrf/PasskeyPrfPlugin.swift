@@ -1,13 +1,11 @@
 import BreezSdkSpark
 import Capacitor
 import Foundation
-import os.log
 
 /// Capacitor bridge over `BreezSdkSpark.PasskeyClient`.
 ///
 /// Owns a single `PasskeyClient` per session (built in `initialize`)
-/// plus a process-lifetime `KeychainCredentialRegistry` so the SDK
-/// can auto-merge known credential IDs on every ceremony.
+/// plus a process-lifetime `KeychainCredentialRegistry`.
 @objc(PasskeyPlugin)
 public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     public let identifier = "PasskeyPlugin"
@@ -30,11 +28,8 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         return nil
     }()
     private var client: PasskeyClient?
-
-    private static let log = OSLog(
-        subsystem: "technology.breez.glow.passkey",
-        category: "PasskeyPlugin"
-    )
+    /// RP the client was initialized with; needed to key the registry.
+    private var rpId: String?
 
     @objc func initialize(_ call: CAPPluginCall) {
         guard #available(iOS 18.0, *) else {
@@ -45,25 +40,15 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
             return
         }
+        self.rpId = rpId
         let provider = PasskeyProvider(
             rpId: rpId,
             rpName: rpName,
             userName: call.getString("userName"),
-            userDisplayName: call.getString("userDisplayName"),
-            credentialRegistry: registry as? KeychainCredentialRegistry,
-            onRegistryError: { op, err in
-                os_log("Registry %{public}@ failed: %{public}@",
-                       log: PasskeyPlugin.log, type: .info,
-                       String(describing: op),
-                       err.localizedDescription)
-            }
+            userDisplayName: call.getString("userDisplayName")
         )
         let config = call.getString("defaultLabel").map { PasskeyConfig(defaultLabel: $0) }
-        client = PasskeyClient(
-            prfProvider: provider,
-            breezApiKey: call.getString("breezApiKey"),
-            config: config
-        )
+        client = PasskeyClient(prfProvider: provider, breezApiKey: call.getString("breezApiKey"), config: config)
         call.resolve()
     }
 
@@ -93,10 +78,10 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         Task {
             do {
                 let response = try await c.register(request: request)
-                call.resolve([
-                    "wallet": Self.encodeWallet(response.wallet),
-                    "credential": Self.encodeCredential(response.credential),
-                ])
+                await self.recordCredential(response.credential)
+                var out: [String: Any] = ["wallet": Self.encodeWallet(response.wallet)]
+                out["credential"] = response.credential.map { Self.encodeCredential($0) } ?? NSNull()
+                call.resolve(out)
             } catch {
                 call.reject(error.localizedDescription, errorCode(error))
             }
@@ -116,11 +101,12 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         Task {
             do {
                 let response = try await c.signIn(request: request)
+                await self.recordCredential(response.credential)
                 var out: [String: Any] = [
                     "wallet": Self.encodeWallet(response.wallet),
                     "labels": response.labels,
                 ]
-                out["credentialId"] = response.credentialId?.base64EncodedString() ?? NSNull()
+                out["credentialId"] = response.credential?.credentialId.base64EncodedString() ?? NSNull()
                 call.resolve(out)
             } catch {
                 call.reject(error.localizedDescription, errorCode(error))
@@ -141,10 +127,11 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         Task {
             do {
                 let response = try await c.connectWithPasskey(request: request)
+                await self.recordCredential(response.credential)
                 var out: [String: Any] = [
                     "wallet": Self.encodeWallet(response.wallet),
                 ]
-                if let cred = response.registeredCredential {
+                if let cred = response.credential {
                     out["registeredCredential"] = Self.encodeCredential(cred)
                 } else {
                     out["registeredCredential"] = NSNull()
@@ -190,13 +177,15 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func getKnownCredentialIds(_ call: CAPPluginCall) {
-        guard let c = client else {
+        guard #available(iOS 18.0, *),
+              let reg = registry as? KeychainCredentialRegistry,
+              let rp = rpId else {
             call.resolve(["credentialIds": [String]()])
             return
         }
         Task {
             do {
-                let ids = try await c.credentials().get()
+                let ids = try await reg.read(rpId: rp)
                 call.resolve(["credentialIds": ids.map { $0.base64EncodedString() }])
             } catch {
                 call.reject(error.localizedDescription, errorCode(error))
@@ -210,13 +199,15 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject("Missing or invalid credentialId", "INVALID_ARGUMENT")
             return
         }
-        guard let c = client else {
+        guard #available(iOS 18.0, *),
+              let reg = registry as? KeychainCredentialRegistry,
+              let rp = rpId else {
             call.resolve()
             return
         }
         Task {
             do {
-                try await c.credentials().remove(credentialId: id)
+                try await reg.remove(rpId: rp, credentialId: id)
                 call.resolve()
             } catch {
                 call.reject(error.localizedDescription, errorCode(error))
@@ -225,18 +216,29 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc func clearKnownCredentialIds(_ call: CAPPluginCall) {
-        guard let c = client else {
+        guard #available(iOS 18.0, *),
+              let reg = registry as? KeychainCredentialRegistry,
+              let rp = rpId else {
             call.resolve()
             return
         }
         Task {
             do {
-                try await c.credentials().clear()
+                try await reg.clear(rpId: rp)
                 call.resolve()
             } catch {
                 call.reject(error.localizedDescription, errorCode(error))
             }
         }
+    }
+
+    /// Best-effort: record a credential ID in the synced store.
+    private func recordCredential(_ cred: PasskeyCredential?) async {
+        guard #available(iOS 18.0, *),
+              let cred,
+              let reg = registry as? KeychainCredentialRegistry,
+              let rp = rpId else { return }
+        try? await reg.add(rpId: rp, credentialId: cred.credentialId)
     }
 
     private func parseB64Array(_ call: CAPPluginCall, key: String) -> [Data] {
@@ -261,11 +263,11 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
-    private static func encodeCredential(_ cred: RegisteredCredential) -> [String: Any] {
+    private static func encodeCredential(_ cred: PasskeyCredential) -> [String: Any] {
         var out: [String: Any] = [
             "credentialId": cred.credentialId.base64EncodedString(),
-            "userId": cred.userId.base64EncodedString(),
         ]
+        out["userId"] = cred.userId?.base64EncodedString() ?? NSNull()
         out["aaguid"] = cred.aaguid?.base64EncodedString() ?? NSNull()
         out["backupEligible"] = cred.backupEligible ?? NSNull()
         return out

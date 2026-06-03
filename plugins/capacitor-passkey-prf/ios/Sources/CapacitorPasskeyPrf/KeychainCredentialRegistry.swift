@@ -1,24 +1,17 @@
-import BreezSdkSpark
 import Foundation
 import Security
 
-/// iCloud-synced Keychain-backed implementation of the SDK's
-/// `CredentialRegistry` protocol. One generic-password item per RP,
-/// holding a JSON-encoded array of base64-encoded credential IDs.
+/// iCloud-synced Keychain-backed store of known passkey credential IDs.
+/// One generic-password item per RP, holding a JSON-encoded array of
+/// base64-encoded credential IDs.
 ///
 /// `kSecAttrSynchronizable: kCFBooleanTrue` opts the entry into iCloud
 /// Keychain sync so it survives reinstall and replicates across the
-/// user's signed-in devices. Replaces the SDK's deleted built-in
-/// `KnownCredentialsStore`. Service identifier kept stable
+/// user's signed-in devices. Service identifier kept stable
 /// (`breez.spark.passkey.knownCredentials`) so existing keychain
-/// entries from the prior SDK version are preserved across the
-/// migration.
-///
-/// The SDK invokes these methods best-effort with a 3 second timeout;
-/// any errors thrown here are surfaced via the provider's
-/// `onRegistryError` callback and never block the WebAuthn ceremony.
+/// entries are preserved.
 @available(iOS 18.0, macOS 15.0, *)
-public struct KeychainCredentialRegistry: CredentialRegistry {
+public struct KeychainCredentialRegistry {
     private let service: String
 
     public init(service: String = "breez.spark.passkey.knownCredentials") {
