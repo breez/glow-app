@@ -18,6 +18,7 @@ import breez_sdk_spark.PasskeyClient
 import breez_sdk_spark.PasskeyConfig
 import breez_sdk_spark.PasskeyCredential
 import breez_sdk_spark.PasskeyException
+import breez_sdk_spark.PasskeyProviderOptions
 import breez_sdk_spark.PrfProviderException
 import breez_sdk_spark.RegisterRequest
 import breez_sdk_spark.Seed
@@ -56,10 +57,12 @@ class PasskeyPlugin : Plugin() {
         this.rpId = rpId
         val provider = PasskeyProvider(
             activityProvider = { activity as Activity },
-            rpId = rpId,
-            rpName = rpName,
-            userName = call.getString("userName"),
-            userDisplayName = call.getString("userDisplayName"),
+            options = PasskeyProviderOptions(
+                rpId = rpId,
+                rpName = rpName,
+                userName = call.getString("userName"),
+                userDisplayName = call.getString("userDisplayName"),
+            ),
         )
         val config = call.getString("defaultLabel")?.let { PasskeyConfig(defaultLabel = it) }
         client = PasskeyClient(provider, call.getString("breezApiKey"), config)
