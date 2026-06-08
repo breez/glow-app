@@ -6,17 +6,21 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: main tip (3dab84f) with the passkey work merged. This is the
-#   reduced passkey API: the CredentialRegistry abstraction is gone
-#   (no credentialRegistry / onRegistryError provider options, no
+# Pin: main tip (a86bdab9) with the passkey work merged. Reduced passkey
+#   API: the CredentialRegistry abstraction is gone (no
+#   credentialRegistry / onRegistryError provider options, no
 #   PasskeyClient.credentials()), RegisteredCredential is now
 #   PasskeyCredential, and register / signIn / connectWithPasskey all
-#   return a unified `credential`.
+#   return a unified `credential`. Provider config is grouped: rpId /
+#   rpName / userName / userDisplayName now live on a
+#   PasskeyProviderOptions passed to the PasskeyProvider constructor
+#   (and settable on PasskeyConfig for the zero-config client).
 #
-#   glow-app's capacitor-passkey-prf plugin (Swift + Kotlin) now owns
-#   its known-credentials store directly (KeychainCredentialRegistry /
+#   glow-app's capacitor-passkey-prf plugin (Swift + Kotlin) owns its
+#   known-credentials store directly (KeychainCredentialRegistry /
 #   BlockStoreCredentialRegistry, no longer the SDK's removed
 #   CredentialRegistry interface) and records credential IDs after each
-#   ceremony. glow-web's JS passkey layer was migrated in lockstep
-#   (submodule bumped to the matching commit).
-3dab84f6192093502a04d227c139a45d50d0fd40
+#   ceremony; it builds the SDK PasskeyProvider via PasskeyProviderOptions.
+#   glow-web's JS passkey layer is migrated in lockstep (submodule bumped
+#   to the matching commit).
+a86bdab91394c55e316cee824fb0611bae4057d9

@@ -42,10 +42,12 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         self.rpId = rpId
         let provider = PasskeyProvider(
-            rpId: rpId,
-            rpName: rpName,
-            userName: call.getString("userName"),
-            userDisplayName: call.getString("userDisplayName")
+            options: PasskeyProviderOptions(
+                rpId: rpId,
+                rpName: rpName,
+                userName: call.getString("userName"),
+                userDisplayName: call.getString("userDisplayName")
+            )
         )
         let config = call.getString("defaultLabel").map { PasskeyConfig(defaultLabel: $0) }
         client = PasskeyClient(prfProvider: provider, breezApiKey: call.getString("breezApiKey"), config: config)
