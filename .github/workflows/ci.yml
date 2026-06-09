@@ -733,7 +733,7 @@ jobs:
         env:
           GLOW_RELEASE_TAG: >-
             ${{ (github.event_name == 'workflow_dispatch' &&
-                 inputs.distribution == 'store')
+                 (inputs.distribution == 'store' || inputs.distribution == 'both'))
                 && format('release-{0}', inputs.version)
                 || '' }}
         run: ./scripts/ci/compute-version.sh
@@ -853,7 +853,7 @@ jobs:
         env:
           GLOW_RELEASE_TAG: >-
             ${{ (github.event_name == 'workflow_dispatch' &&
-                 inputs.distribution == 'store')
+                 (inputs.distribution == 'store' || inputs.distribution == 'both'))
                 && format('release-{0}', inputs.version)
                 || '' }}
         run: ./scripts/ci/compute-version.sh
