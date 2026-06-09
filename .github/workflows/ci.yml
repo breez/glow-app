@@ -43,15 +43,19 @@ on:
           # firebase — Firebase App Distribution (.dev bundle IDs)
           # store    — TestFlight + Play Internal. Requires `version`. Pair with
           #            dry_run=true to verify the pipeline without uploading.
+          # both     runs firebase + store in parallel: one dispatch fans out
+          #          to all four publish jobs. Requires `version` (like store);
+          #          dry_run skips only the store upload, FAD still uploads.
           - none
           - firebase
           - store
+          - both
       version:
-        description: 'Marketing version MAJOR.MINOR.PATCH — required when distribution=store (e.g. 0.0.2)'
+        description: 'Marketing version MAJOR.MINOR.PATCH, required when distribution=store or both (e.g. 0.0.2)'
         type: string
         default: ''
       dry_run:
-        description: 'Build + sign but skip the upload step (only meaningful when distribution=store)'
+        description: 'Build + sign but skip the upload step (only meaningful when distribution=store or both)'
         type: boolean
         default: false
       notes:
@@ -105,17 +109,19 @@ jobs:
           fail() { echo "::error::$1"; exit 1; }
           warn() { echo "::warning::$1"; }
 
-          if [[ "$DISTRIBUTION" == "store" ]]; then
-            [[ -n "$VERSION" ]] || fail "distribution=store requires version input (MAJOR.MINOR.PATCH, e.g. 0.0.2)"
+          # `both` runs the store path alongside firebase, so it shares
+          # store's version requirement and dry_run semantics.
+          if [[ "$DISTRIBUTION" == "store" || "$DISTRIBUTION" == "both" ]]; then
+            [[ -n "$VERSION" ]] || fail "distribution=$DISTRIBUTION requires version input (MAJOR.MINOR.PATCH, e.g. 0.0.2)"
             [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must match MAJOR.MINOR.PATCH, got: '$VERSION'"
           fi
 
-          if [[ -n "$VERSION" && "$DISTRIBUTION" != "store" ]]; then
-            warn "version='$VERSION' ignored — only distribution=store uses version"
+          if [[ -n "$VERSION" && "$DISTRIBUTION" != "store" && "$DISTRIBUTION" != "both" ]]; then
+            warn "version='$VERSION' ignored: only distribution=store|both uses version"
           fi
 
-          if [[ "$DRY_RUN" == "true" && "$DISTRIBUTION" != "store" ]]; then
-            warn "dry_run=true ignored — only distribution=store has an upload step to skip"
+          if [[ "$DRY_RUN" == "true" && "$DISTRIBUTION" != "store" && "$DISTRIBUTION" != "both" ]]; then
+            warn "dry_run=true ignored: only distribution=store|both has an upload step to skip"
           fi
 
           echo "validated target=$TARGET distribution=$DISTRIBUTION version=${VERSION:-<none>} dry_run=$DRY_RUN"
@@ -464,8 +470,8 @@ jobs:
     # Same cold-run budget as the `ios` job plus FAD upload time.
     timeout-minutes: 60
     # Fires on preview-*/rc-* tag pushes OR dispatch
-    # (target=ios|both, distribution=firebase).
-    # distribution=store routes to ios-release instead.
+    # (target=ios|both, distribution=firebase or both).
+    # distribution=store routes to ios-release; both runs both jobs.
     # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
       !cancelled() &&
@@ -475,7 +481,7 @@ jobs:
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
-        inputs.distribution == 'firebase'))
+        contains(fromJSON('["firebase","both"]'), inputs.distribution)))
     permissions:
       contents: read
     env:
@@ -584,7 +590,7 @@ jobs:
        startsWith(github.ref, 'refs/tags/rc-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
-        inputs.distribution == 'firebase'))
+        contains(fromJSON('["firebase","both"]'), inputs.distribution)))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -672,7 +678,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [warm-sdk-linux]
     timeout-minutes: 45
-    # release-* tag push OR dispatch (target=android|both, distribution=store).
+    # release-* tag push OR dispatch (target=android|both, distribution=store or both).
     # dry_run=true verifies the upload pipeline without publishing.
     # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
@@ -681,7 +687,7 @@ jobs:
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["android","both"]'), inputs.target) &&
-        inputs.distribution == 'store'))
+        contains(fromJSON('["store","both"]'), inputs.distribution)))
     steps:
       - uses: actions/checkout@v6
         with:
@@ -796,7 +802,7 @@ jobs:
     needs: [warm-sdk-macos, validate-inputs]
     timeout-minutes: 75
     # release-* tag push (paired with android-release + release-github) OR
-    # dispatch (target=ios|both, distribution=store). target=ios dispatch
+    # dispatch (target=ios|both, distribution=store or both). target=ios dispatch
     # = iOS-only hotfix rebuild without firing android-release / release-github.
     # `!cancelled()` load-bearing — see `ios` job above.
     if: >-
@@ -806,7 +812,7 @@ jobs:
       (startsWith(github.ref, 'refs/tags/release-') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target) &&
-        inputs.distribution == 'store'))
+        contains(fromJSON('["store","both"]'), inputs.distribution)))
     steps:
       - uses: actions/checkout@v6
         with:

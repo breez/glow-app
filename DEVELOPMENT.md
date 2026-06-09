@@ -237,9 +237,9 @@ or `gh workflow run`:
 | Input | Values | Required | Notes |
 |---|---|---|---|
 | `target` | `ios` \| `android` \| `both` | yes | Platform(s) to build. `both` fires the matching iOS + Android jobs in parallel. |
-| `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play Internal (Android). |
-| `version` | `MAJOR.MINOR.PATCH` | only when `distribution=store` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
-| `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store`. Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
+| `distribution` | `none` \| `firebase` \| `store` \| `both` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play Internal (Android). `both` = `firebase` + `store` in parallel from one dispatch (all four publish jobs; requires `version`). |
+| `version` | `MAJOR.MINOR.PATCH` | when `distribution=store` or `both` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
+| `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store` or `both` (in `both`, skips the store upload only; Firebase still uploads). Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
 
 **Preset scenarios** (old `job` enum → new input combo)
 
@@ -253,10 +253,11 @@ or `gh workflow run`:
 | Android Play Internal (was `android-internal`) | `android` | `store` | `0.0.2` | — |
 | Full release dry-run (was `full-release`) | `both` | `store` | `0.0.3` | `true` |
 | Full release (pre-tag verification) | `both` | `store` | `0.0.3` | `false` |
+| FAD + stores in parallel (one run) | `both` | `both` | `0.0.3` | `false` |
 
 The `web` static-analysis job (tsc + lint + vitest) fires alongside
-every distribution-bound dispatch (`distribution=firebase` or
-`distribution=store`, any target). `distribution=none` compile-check
+every distribution-bound dispatch (`distribution=firebase`,
+`distribution=store`, or `distribution=both`, any target). `distribution=none` compile-check
 dispatches skip it — their only job is to confirm the platform build
 still compiles.
 
@@ -274,6 +275,10 @@ gh workflow run ci.yml --ref feat/my-branch \
 # Dry-run the full release pipeline from main (build + sign, no upload)
 gh workflow run ci.yml --ref main \
   -f target=both -f distribution=store -f version=0.0.3 -f dry_run=true
+
+# Publish to Firebase App Distribution AND the stores in parallel (one run)
+gh workflow run ci.yml --ref main \
+  -f target=both -f distribution=both -f version=0.0.3
 ```
 
 ### Running iOS validation on a PR
