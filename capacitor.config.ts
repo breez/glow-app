@@ -53,36 +53,26 @@ const config: CapacitorConfig = {
     },
   },
   plugins: {
-    // Route the native WebView's fetch / XMLHttpRequest through native HTTP.
+    // DISABLED. This was enabled to route the WebView's fetch through native
+    // HTTP, working around the SDK's custom User-Agent
+    // ("breez-sdk-spark/<version>") tripping a CORS preflight: WebKit/iOS
+    // forwards that author User-Agent, upgrading the cross-origin GET to a
+    // preflighted request, and blockstream's OPTIONS preflight 404s, so
+    // onchain deposits couldn't be claimed.
     //
-    // WHY: the Breez Spark SDK runs as WASM inside the WebView and makes its
-    // Bitcoin chain requests (default https://blockstream.info/api) via the
-    // WebView's `fetch`. The SDK's reqwest HTTP client is built with a custom
-    // `User-Agent` ("breez-sdk-spark/<version>"), which is NOT a CORS-safelisted
-    // request header. On iOS (WKWebView = WebKit) the engine forwards that
-    // author User-Agent onto the request, which upgrades the cross-origin GET
-    // to a *preflighted* request. blockstream's `OPTIONS` preflight answers 404
-    // with no `Access-Control-Allow-Headers`, so the preflight fails and the
-    // request surfaces to the SDK as `TypeError: Load failed`, so onchain
-    // deposits can't be claimed. Chromium (Android WebView + desktop web) silently DROPS
-    // the author User-Agent, so the request stays "simple" and those platforms
-    // are unaffected, which is why this reproduces only on iOS / WebKit.
+    // The global patch was too broad: it also proxied the SDK's
+    // Spark-operator calls, which native HTTP does not round-trip faithfully
+    // (binary bodies / responses), breaking Lightning invoice and Bitcoin
+    // address generation on iOS.
     //
-    // CapacitorHttp rewrites cross-origin requests to a same-origin proxy URL
-    // ({serverUrl}/_capacitor_http_interceptor_?u=...) and performs the real
-    // request natively, so the WebView never does a CORS preflight. This also
-    // covers any other third-party endpoint whose CORS doesn't whitelist
-    // User-Agent (e.g. some LNURL / Lightning-address hosts like aqua.net).
-    //
-    // Scope: this patch only installs inside the native WebView (via
-    // native-bridge.js, gated on this `enabled` flag); the Vercel web build
-    // keeps using the browser's normal `fetch`. WebSockets are NOT routed
-    // natively, so the SDK's real-time event stream is unaffected. Keep
-    // `loggingBehavior: 'none'` (above): with CapacitorHttp on, all HTTP now
-    // crosses the Capacitor bridge, and the bridge logs call args. No seed
-    // material travels over HTTP, but the logging pin stays load-bearing.
+    // The narrower, correct fix is app-side: glow-web strips the custom
+    // User-Agent from outgoing requests (src/utils/stripUserAgentFetch.ts),
+    // so every cross-origin request stays CORS-simple on all engines
+    // (WebKit, Firefox, Chromium) over plain fetch, with no native routing.
+    // That fixes the blockstream preflight AND any other CORS-strict host
+    // (LNURL / Lightning-address hosts) without touching operator traffic.
     CapacitorHttp: {
-      enabled: true,
+      enabled: false,
     },
     SplashScreen: {
       // Capacitor 4+ wires this into Android 12's Theme.SplashScreen API via
