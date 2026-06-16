@@ -48,31 +48,51 @@ repositories {
     mavenLocal()
 }
 
-// Short-circuit Gradle's dynamic-version resolution cache (default 24h)
-// for the `breez_sdk_spark:bindings-android:0.1.0-local-+` wildcard so
-// `make sdk-android` publishing a new timestamped coord is picked up
-// on the NEXT build — not 24h later. Scoped to this single artifact;
-// everything else respects normal Gradle caching.
+// The SDK binding is pinned to an exact 0.1.0-local-<sha> version, but
+// `make sdk-android` can republish that SAME coordinate to mavenLocal
+// with rebuilt content (e.g. a native-lib rebuild at the same pinned
+// SHA). Treat it as a changing module and never cache it, otherwise
+// gradle would keep the first-resolved immutable copy.
 configurations.all {
-    resolutionStrategy.cacheDynamicVersionsFor 0, 'seconds'
+    resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
 }
+
+// Derive the exact published SDK version from the spark-sdk commit pinned
+// in .spark-sdk-ref (walk up from this plugin to the glow-app root). Must
+// match Makefile's SDK_MAVEN_VERSION so the published coordinate and this
+// dependency always agree.
+def sparkSdkRefFile = {
+    def dir = projectDir
+    while (dir != null) {
+        def candidate = new File(dir, ".spark-sdk-ref")
+        if (candidate.exists()) return candidate
+        dir = dir.parentFile
+    }
+    throw new GradleException("capacitor-passkey-prf: .spark-sdk-ref not found above ${projectDir}")
+}()
+def sparkSdkSha = sparkSdkRefFile.readLines()
+    .collect { it.trim() }
+    .findResult { (it ==~ /[0-9a-fA-F]{40}/) ? it.substring(0, 12) : null }
+if (sparkSdkSha == null) {
+    throw new GradleException("capacitor-passkey-prf: no 40-char SHA in ${sparkSdkRefFile}")
+}
+def sparkSdkVersion = "0.1.0-local-${sparkSdkSha}"
 
 dependencies {
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation project(':capacitor-android')
 
-    // Breez Spark SDK — published to mavenLocal from spark-sdk build (pr/passkey-core branch).
+    // Breez Spark SDK, published to mavenLocal by `make sdk-android`.
     // Provides CredentialManagerPrfProvider, PasskeyPrfProvider interface, PasskeyPrfException.
-    // Replace with published Maven dependency once SDK PR #781 merges.
+    // Replace with a published Maven dependency once SDK PR #781 merges.
     //
-    // The `-+` suffix is a dynamic-version wildcard: resolves to the
-    // newest mavenLocal version matching `0.1.0-local-<anything>`.
-    // `make sdk-android` publishes a timestamped coord on every
-    // invocation (see Makefile:SDK_MAVEN_VERSION) so this wildcard
-    // always picks up the freshest local build. Fixes the
-    // "forgot to rebuild SDK → stale AAR gets linked" footgun that
-    // previously surfaced as latent behavior on devices.
-    implementation "breez_sdk_spark:bindings-android:0.1.0-local-+"
+    // Pinned to the EXACT coordinate built from the spark-sdk commit in
+    // .spark-sdk-ref (sparkSdkVersion above). A build links the SDK
+    // matching the pin or fails to resolve, never a leftover artifact
+    // from an unrelated local SDK build (issue #72).
+    implementation("breez_sdk_spark:bindings-android:${sparkSdkVersion}") {
+        changing = true
+    }
 
     // AppCompat (required to resolve Capacitor's AppCompatActivity)
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

@@ -39,26 +39,17 @@ ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 # if a specific NDK is needed.
 ANDROID_NDK_HOME ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/ndk/*)))
 
-# Include a timestamp so every `make sdk-android` invocation publishes
-# a UNIQUE coordinate to mavenLocal. Without this, gradle's
-# `publishToMavenLocal` task can skip re-publishing if the AAR output
-# file exists and the source mtime check doesn't detect a change
-# through the dep graph — observed when a Kotlin edit on
-# spark-sdk's `CredentialManagerPrfProvider.kt` silently kept yesterday's
-# AAR in mavenLocal, so the glow-app build pulled stale code from
-# the consumer side.
-#
-# Consumer side (plugins/capacitor-passkey-prf/android/build.gradle)
-# uses the `0.1.0-local-+` wildcard to resolve to whatever latest
-# timestamp exists in mavenLocal. `make sdk-android` publishes a new
-# timestamped coord → gradle's dependency resolution picks it up next
-# build.
-#
-# Devs who haven't changed spark-sdk source can SKIP `make sdk-android`;
-# gradle resolves the wildcard to the last-published timestamp, which
-# is already correct. This preserves the "cache hit is fast" property
-# while fixing the "cache miss looks like a cache hit" bug.
-SDK_MAVEN_VERSION = 0.1.0-local-$(shell date +%Y%m%d%H%M%S)
+# Stamp the published mavenLocal coordinate with the pinned spark-sdk SHA
+# from .spark-sdk-ref so the plugin can depend on this EXACT version
+# instead of a floating `0.1.0-local-+` wildcard. The wildcard resolved
+# to whatever timestamped coord was published LAST by any local SDK
+# build, so a stale artifact from an unrelated branch could be linked
+# silently (issue #72). The plugin build.gradle derives the same string
+# from the same file. Freshness on re-publish comes from `make
+# sdk-android` rebuilding the native libs (issue #71): the AAR inputs
+# change, so gradle re-publishes the coordinate.
+SPARK_SDK_SHA = $(shell grep -vE '^[[:space:]]*\#' .spark-sdk-ref | grep -oiE '[0-9a-f]{40}' | head -n1 | cut -c1-12)
+SDK_MAVEN_VERSION = 0.1.0-local-$(SPARK_SDK_SHA)
 
 # Capacitor 8 + AGP require JDK 21. Default to Android Studio's bundled
 # JBR (which is 21+) if JAVA_HOME isn't already set. Override with
