@@ -33,6 +33,12 @@ SDK_WASM_TGZ = $(firstword $(wildcard $(SDK_WASM_DIR)/breeztech-breez-sdk-spark-
 
 ANDROID_HOME ?= $(HOME)/Library/Android/sdk
 
+# spark-sdk's `package-android` (cargo-ndk) requires ANDROID_NDK_HOME and
+# errors out if it is unset. Default to the highest NDK installed under
+# $(ANDROID_HOME)/ndk; override with `make sdk-android ANDROID_NDK_HOME=...`
+# if a specific NDK is needed.
+ANDROID_NDK_HOME ?= $(lastword $(sort $(wildcard $(ANDROID_HOME)/ndk/*)))
+
 # Include a timestamp so every `make sdk-android` invocation publishes
 # a UNIQUE coordinate to mavenLocal. Without this, gradle's
 # `publishToMavenLocal` task can skip re-publishing if the AAR output
@@ -264,14 +270,17 @@ _sdk-ios-package:
 	@echo "iOS SDK ready"
 
 sdk-android: ## Build Spark SDK for Android and publish to mavenLocal
-	@# Generate UniFFI Kotlin bindings + copy them into the gradle lib
-	@# module's sources. spark-sdk's gradle config does NOT do this
-	@# automatically — devs usually have the generated files from a
-	@# prior manual `make bindings-kotlin`, which is why local builds
-	@# succeed on a clean gradle cache but CI's cold build fails with
-	@# "Unresolved reference: breez_sdk_spark". Belongs upstream in
-	@# spark-sdk's Android gradle build; until then, do it here.
-	cd $(BINDINGS_DIR) && $(MAKE) bindings-kotlin
+	@# Rebuild the native libraries for all four Android ABIs AND
+	@# regenerate the UniFFI Kotlin bindings from the SAME checkout, then
+	@# copy both into the gradle lib module's sources. package-android
+	@# runs cargo-ndk + gobley-uniffi-bindgen and refreshes
+	@# langs/.../jniLibs. Using bindings-kotlin alone regenerated the
+	@# Kotlin but left whatever stale `.so`s already sat in jniLibs, so
+	@# the published AAR mismatched its own bindings and crashed at
+	@# runtime with missing UniFFI symbols (issue #71). Belongs upstream
+	@# in spark-sdk's Android gradle build; until then, do it here.
+	cd $(BINDINGS_DIR) && ANDROID_HOME=$(ANDROID_HOME) \
+		ANDROID_NDK_HOME=$(ANDROID_NDK_HOME) $(MAKE) package-android
 	mkdir -p $(SDK_ANDROID_DIR)/lib/src/main/kotlin
 	cp -R $(BINDINGS_DIR)/ffi/kotlin/main/kotlin/. \
 		$(SDK_ANDROID_DIR)/lib/src/main/kotlin/
