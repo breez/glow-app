@@ -63,6 +63,7 @@ runs:
       run: |
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
         echo "SPARK_SDK_DIR=$GITHUB_WORKSPACE/.spark-sdk-checkout" >> "$GITHUB_ENV"
+        echo "platforms_slug=$(echo '${{ inputs.platforms }}' | tr ',' '-')" >> "$GITHUB_OUTPUT"
 
     # Create a compat symlink at $GITHUB_WORKSPACE/../spark-sdk →
     # $GITHUB_WORKSPACE/.spark-sdk-checkout so downstream tooling with
@@ -191,7 +192,7 @@ runs:
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ../spark-sdk
-        key: ${{ inputs.platforms }}-${{ steps.sdk-sha.outputs.sha }}
+        key: ${{ steps.sdk-sha.outputs.platforms_slug }}-${{ steps.sdk-sha.outputs.sha }}
 
     # Toolchain pieces needed to build the SDK from source on a
     # cold cache. The `make sdk-*` targets invoke cargo + wasm-pack
@@ -252,6 +253,25 @@ runs:
         echo "Homebrew LLVM clang at: $CLANG_PATH"
         "$CLANG_PATH" --version | head -1
 
+    # ubuntu-latest ships only ~14 GB free on /, and warming all four Android
+    # ABIs (Rust target dirs + per-ABI jniLibs + Gradle merge intermediates)
+    # overruns it: the jniLib merge fails with "No space left on device".
+    # Reclaim large preinstalled toolchains the warmer never uses. The Android
+    # SDK/NDK under /usr/local/lib/android is deliberately left intact.
+    - name: Free disk space for the Android warmer (Linux)
+      if: runner.os == 'Linux' && inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
+      shell: bash
+      run: |
+        df -h / | tail -1
+        sudo rm -rf \
+          /opt/hostedtoolcache/CodeQL \
+          /opt/ghc /usr/local/.ghcup \
+          /usr/share/dotnet \
+          /usr/share/swift \
+          /usr/local/share/boost || true
+        sudo docker image prune --all --force >/dev/null 2>&1 || true
+        df -h / | tail -1
+
     - name: Setup Android SDK + NDK (if android requested)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
       uses: android-actions/setup-android@v3
@@ -269,7 +289,9 @@ runs:
         echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
         rustup target add aarch64-linux-android armv7-linux-androideabi \
           i686-linux-android x86_64-linux-android
-        cargo install cargo-ndk --locked --version '^3'
+        # cargo-ndk >=4: the SDK bindings Makefile passes --link-libcxx-shared,
+        # which 3.x doesn't recognize.
+        cargo install cargo-ndk --locked --version '=4.1.2'
 
     - name: Install iOS Rust targets (if ios requested)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'ios')

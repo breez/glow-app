@@ -270,9 +270,20 @@ sdk-android: ## Build Spark SDK for Android and publish to mavenLocal
 	@# the published AAR mismatched its own bindings and crashed at
 	@# runtime with missing UniFFI symbols (issue #71). Belongs upstream
 	@# in spark-sdk's Android gradle build; until then, do it here.
+	@# Wipe previously-generated bindings + gradle outputs, then RE-CREATE the
+	@# kotlin source dir BEFORE package-android runs. The generated .kt are
+	@# git-ignored, so a fresh CI checkout has no lib/src/main/kotlin dir. With
+	@# the dir absent, package-android's `cp -r breez_sdk_spark .../kotlin/`
+	@# copies the CONTENTS flat (kotlin/breez_sdk_spark.jvm.kt) instead of
+	@# nesting under kotlin/breez_sdk_spark/. glow-app's later `cp -R . kotlin/`
+	@# then adds the nested copy too, so both land in package breez_sdk_spark
+	@# and collide as ~3400 duplicate declarations at compileReleaseKotlin.
+	@# Local trees already have kotlin/ from prior builds, so they never hit it.
+	@# Pre-creating the dir makes the SDK's cp nest, leaving a single copy.
+	rm -rf $(BINDINGS_DIR)/ffi/kotlin $(SDK_ANDROID_DIR)/lib/src/main/kotlin $(SDK_ANDROID_DIR)/lib/build
+	mkdir -p $(SDK_ANDROID_DIR)/lib/src/main/kotlin
 	cd $(BINDINGS_DIR) && ANDROID_HOME=$(ANDROID_HOME) \
 		ANDROID_NDK_HOME=$(ANDROID_NDK_HOME) $(MAKE) package-android
-	mkdir -p $(SDK_ANDROID_DIR)/lib/src/main/kotlin
 	cp -R $(BINDINGS_DIR)/ffi/kotlin/main/kotlin/. \
 		$(SDK_ANDROID_DIR)/lib/src/main/kotlin/
 	cd $(SDK_ANDROID_DIR) && ANDROID_HOME=$(ANDROID_HOME) \
