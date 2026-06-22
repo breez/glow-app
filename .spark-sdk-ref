@@ -6,6 +6,6 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk main at 164136020 (Turnkey external-signer backend +
-#   HTTP response-header support on top of the prior passkey API).
-164136020f0e7bbba3d18fc324c20ff75233b63d
+# Pin: spark-sdk main at 897a80118 (WASM reqwest User-Agent drop, #957,
+#   for CORS-simple requests; compilable Android UniFFI bindings).
+897a80118723a6481c3a07c4fbc79f46854a0369
