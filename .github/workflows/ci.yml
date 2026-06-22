@@ -140,7 +140,7 @@ jobs:
     outputs:
       ios-cache-hit: ${{ steps.set-output.outputs.ios-cache-hit }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Read pinned SDK SHA
         id: sdk-sha
@@ -198,7 +198,7 @@ jobs:
         (contains(fromJSON('["android","both"]'), inputs.target) ||
          inputs.distribution != 'none')))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - uses: ./.github/actions/setup-glow-app
@@ -237,7 +237,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target)))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
       - run: sudo xcode-select -s /Applications/Xcode_26.3.app
@@ -266,7 +266,7 @@ jobs:
         inputs.distribution != 'none'))
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -322,7 +322,7 @@ jobs:
       inputs.distribution == 'none'
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -403,7 +403,7 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'none'))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -484,7 +484,7 @@ jobs:
       P12_PASSWORD: ${{ secrets.IOS_PREVIEW_CERT_P12_PASSWORD }}
       PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PREVIEW_PROFILE_BASE64 }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           # release-notes.sh walks release-* tags to find the prior release.
@@ -586,7 +586,7 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'firebase'))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           # release-notes.sh walks release-* tags to find the prior release.
@@ -683,7 +683,7 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           # Full history so release-notes.sh can find the prior release-* tag.
@@ -808,7 +808,7 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           # release-notes.sh needs full tag history.
@@ -938,7 +938,7 @@ jobs:
       # softprops/action-gh-release needs write to mutate releases.
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
