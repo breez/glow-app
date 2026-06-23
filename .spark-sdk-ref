@@ -6,6 +6,6 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk main at 897a80118 (WASM reqwest User-Agent drop, #957,
-#   for CORS-simple requests; compilable Android UniFFI bindings).
-897a80118723a6481c3a07c4fbc79f46854a0369
+# Pin: spark-sdk main at 93a09e39f (cross-chain mainnet itests, #963;
+#   orchestra send, Boltz route filtering, static deposit key encryption).
+93a09e39f57b2c5d99b444c010cf1b445c6ab53b
