@@ -8,7 +8,7 @@ buildscript {
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:8.13.2'
-        classpath 'com.google.gms:google-services:4.4.4'
+        classpath 'com.google.gms:google-services:4.5.0'
         // Pinned to 3.12.1 — last 3.x release. GPP 4.0.0 (Jan 2025)
         // requires Android Gradle Plugin 9; we ship AGP 8. Dependabot
         // (Phase 4B) will surface AGP-9-compatible bumps when ready.
