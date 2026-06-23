@@ -156,19 +156,15 @@ All configured and wired via `capacitor.config.ts` (with `loggingBehavior: 'none
 
 ### Critical patches (`patch-package`, `postinstall`)
 
-Two node_modules patches that re-apply on every `npm install`:
+One node_modules patch that re-applies on every `npm install`.
 
-- **`patches/@capacitor+keyboard+8.0.3.patch`** — applies
-  [ionic-team/capacitor-keyboard#30](https://github.com/ionic-team/capacitor-keyboard/issues/30)
-  / [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60)
-  (unmerged upstream as of 2026-04-16). Makes the plugin's
-  `setOnApplyWindowInsetsListener` call
-  `possiblyResizeChildOfContent(showingKeyboard)` unconditionally,
-  so the FrameLayout is restored on keyboard-hide events that arrive
-  via the inset path (app switch, programmatic hide, symbol-keyboard
-  fluctuation) — not just via the animation callback. Without this,
-  the grey gap appears when the animation callback is unreliable on
-  a given device.
+The former `patches/@capacitor+keyboard+8.0.3.patch` was dropped once
+its upstream fix
+([ionic-team/capacitor-keyboard#30](https://github.com/ionic-team/capacitor-keyboard/issues/30)
+/ [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60))
+shipped in `@capacitor/keyboard` 8.0.5 (the released source is
+byte-identical to what the patch produced). `@capacitor/keyboard` now
+floats normally and is no longer in the dependabot ignore list.
 
 - **`patches/@capacitor+android+8.3.0.patch`** — patches
   `com.getcapacitor.plugin.SystemBars`'s inset listener to stop

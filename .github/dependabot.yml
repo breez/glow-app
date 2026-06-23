@@ -55,12 +55,11 @@ updates:
           - minor
           - patch
     ignore:
-      # Patched via patches/@capacitor+keyboard+8.0.3.patch. Bumping
-      # would silently break keyboard handling until the patch is
-      # re-authored against the new version.
-      - dependency-name: "@capacitor/keyboard"
-      # Patched via patches/@capacitor+android+8.3.0.patch. Same
-      # reason. Coordinated bump requires re-authoring the patch.
+      # Patched via patches/@capacitor+android+8.3.0.patch. Bumping
+      # would silently reintroduce the IME double-subtraction grey-gap
+      # until the patch is re-authored against the refactored
+      # SystemBars.java. The keyboard fix (#30/#60) landed upstream in
+      # @capacitor/keyboard 8.0.5, so that patch + ignore are gone.
       - dependency-name: "@capacitor/android"
       # Pin the Capacitor stack at 8.3.0. Bumping any @capacitor/*
       # package above 8.3.0 requires a coordinated upgrade of all
@@ -212,6 +211,11 @@ updates:
       - dependency-name: "com.android.tools.build:gradle"
         update-types: ["version-update:semver-major"]
       - dependency-name: "com.github.triplet.gradle:play-publisher"
+        update-types: ["version-update:semver-major"]
+      # Gradle wrapper moves with AGP: Gradle 9 needs AGP 9 needs GPP 4.
+      # A wrapper-only major bump breaks the build, so hold it for the
+      # same coordinated PR. Lift all three majors together.
+      - dependency-name: "gradle-wrapper"
         update-types: ["version-update:semver-major"]
 
   # ──────────────────────────────────────────────────────────────────

@@ -19,18 +19,18 @@
     "@capacitor/core": "^8.3.0",
     "@capacitor/filesystem": "^8.1.2",
     "@capacitor/ios": "^8.3.0",
-    "@capacitor/keyboard": "^8.0.3",
+    "@capacitor/keyboard": "^8.0.5",
     "@capacitor/share": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
-    "@capgo/capacitor-navigation-bar": "^8.1.3",
+    "@capgo/capacitor-navigation-bar": "^8.2.5",
     "capacitor-native-vault": "file:plugins/capacitor-native-vault",
     "capacitor-passkey-prf": "file:plugins/capacitor-passkey-prf"
   },
   "devDependencies": {
     "@capacitor/assets": "^3.0.5",
     "patch-package": "^8.0.1",
-    "sharp": "^0.34.5",
-    "typescript": "^6.0.2"
+    "sharp": "^0.35.1",
+    "typescript": "^6.0.3"
   }
 }
