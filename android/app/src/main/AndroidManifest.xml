@@ -31,6 +31,12 @@
         </provider>
     </application>
 
+    <!-- Android 11+ package visibility: required for AppLauncher.openUrl to
+         hand off cash.app universal links to Cash App. -->
+    <queries>
+        <package android:name="com.squareup.cash" />
+    </queries>
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
