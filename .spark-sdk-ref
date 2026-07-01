@@ -6,6 +6,6 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk main at 93a09e39f (cross-chain mainnet itests, #963;
-#   orchestra send, Boltz route filtering, static deposit key encryption).
-93a09e39f57b2c5d99b444c010cf1b445c6ab53b
+# Pin: spark-sdk 0.17.1 release (f660f5a3b). Matches the
+#   @breeztech/breez-sdk-spark ^0.17.1 dep glow-web pins at main.
+f660f5a3bf24323e5c14235efcd28e5aef06c8aa
