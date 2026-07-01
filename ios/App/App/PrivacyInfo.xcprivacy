@@ -11,15 +11,21 @@
   needs its own — Apple aggregates from app + every linked
   framework.
 
-  Required-reason entries below are from @capacitor/filesystem usage
-  in the in-app log-sharing flow (Settings → Share Logs writes a
-  bundled log file to /tmp; reading file timestamps + disk space
-  fall under the required-reason API list).
+  Required-reason entries below cover:
+    - @capacitor/filesystem  file timestamp (C617.1) + disk space
+      (E174.1), from the in-app log-sharing flow (Settings → Share
+      Logs writes a bundled log file to /tmp).
+    - @capacitor/preferences user defaults (CA92.1), from the durable
+      secure-storage install / migration markers (secureStorage.ts).
 
   Plugins NOT triggering required-reason declarations in our build:
-    - @capacitor/preferences          NOT INSTALLED (would need CA92.1)
+    - @capacitor/device               getInfo touches no required-reason API
+    - @capacitor/haptics              no required-reason APIs
+    - @capacitor/network              no required-reason APIs
+    - @capacitor/privacy-screen       FLAG_SECURE / UIBlurEffect not in the list
     - @capacitor/app                  no required-reason APIs
     - @capacitor/browser              no required-reason APIs
+    - @capacitor/clipboard            no required-reason APIs
     - @capacitor/keyboard             no required-reason APIs
     - @capacitor/share                no required-reason APIs
     - @capacitor/splash-screen        no required-reason APIs
@@ -64,6 +70,18 @@
 				     @capacitor/filesystem when reporting free space
 				     for log writes. -->
 				<string>E174.1</string>
+			</array>
+		</dict>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<!-- CA92.1 — access user defaults to read/write info
+				     accessible only to the app itself. Used by
+				     @capacitor/preferences for the durable
+				     secure-storage install / migration markers. -->
+				<string>CA92.1</string>
 			</array>
 		</dict>
 	</array>
