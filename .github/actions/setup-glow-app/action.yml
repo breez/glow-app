@@ -185,14 +185,52 @@ runs:
       run: ./scripts/resolve-spark-sdk.sh
 
     # Second-line cache: Rust target/ directory for incremental
-    # rebuilds when the artifact cache missed but Cargo.lock is
-    # unchanged (e.g., cache eviction without a SDK bump).
+    # rebuilds when the artifact cache missed. `shared-key` (NOT `key`)
+    # keeps the cache name stable across .spark-sdk-ref bumps:
+    # rust-cache appends the Cargo.lock hash to the primary key and
+    # falls back to a prefix restore-key on miss, so a pin bump
+    # restores the previous pin's target/ as a stale base and only
+    # recompiles what changed. The old scheme embedded the SDK SHA in
+    # `key`, which lands in the NON-hashed base of both the cache key
+    # AND the restore-key — every pin bump was a fully cold build.
     - name: Rust compile cache (fallback on artifact-cache miss)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ../spark-sdk
-        key: ${{ steps.sdk-sha.outputs.platforms_slug }}-${{ steps.sdk-sha.outputs.sha }}
+        shared-key: warm-${{ steps.sdk-sha.outputs.platforms_slug }}
+
+    # Cross-OS reuse of the Linux-built WASM tgz. The tgz is platform-
+    # independent, but the macOS warmer used to rebuild it from source
+    # (~8 min incl. Homebrew LLVM) because the unified artifact caches
+    # are per-OS. The Linux warmer saves the tgz under a tiny OS-neutral
+    # key (see the save step after the build); a macOS cold warm
+    # restores it here and skips the wasm toolchain + build below. On a
+    # restore miss (e.g. an iOS-only dispatch where warm-sdk-linux never
+    # ran, or a raced tag push) everything falls back to building wasm
+    # locally — the pre-optimization behavior, not a failure.
+    #
+    # Cross-OS restore is safe for THIS cache because its single path is
+    # workspace-relative: the archive contains no absolute home-dir
+    # paths. The unified per-OS artifact cache can't be shared this way
+    # — its ~/.m2 entry archives as an absolute path that doesn't exist
+    # on the other OS. Runs AFTER "Resolve spark-sdk checkout": the tgz
+    # extracts into the cloned tree (cloning into a non-empty dir would
+    # fail if this ran first).
+    - name: Restore Linux-built WASM tgz (macOS warmer)
+      if: >-
+        runner.os == 'macOS' &&
+        inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' &&
+        contains(inputs.platforms, 'wasm')
+      id: wasm-tgz
+      continue-on-error: true
+      uses: actions/cache/restore@v5
+      with:
+        # Key + single-path list must stay in sync with the Linux
+        # warmer's save step — the cache version hash derives from the
+        # paths string, so drift means a silent miss.
+        key: sdk-wasm-tgz-${{ steps.sdk-sha.outputs.sha }}
+        path: .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
 
     # Toolchain pieces needed to build the SDK from source on a
     # cold cache. The `make sdk-*` targets invoke cargo + wasm-pack
@@ -220,7 +258,12 @@ runs:
         repo-token: ${{ github.token }}
 
     - name: Install wasm-pack + wasm32 target (if WASM requested)
-      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'wasm')
+      # steps.wasm-tgz only runs on macOS — on Linux its output is empty
+      # and this install proceeds as always.
+      if: >-
+        inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' &&
+        contains(inputs.platforms, 'wasm') &&
+        steps.wasm-tgz.outputs.cache-hit != 'true'
       shell: bash
       run: |
         rustup target add wasm32-unknown-unknown
@@ -239,7 +282,8 @@ runs:
       if: >-
         runner.os == 'macOS' &&
         inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' &&
-        contains(inputs.platforms, 'wasm')
+        contains(inputs.platforms, 'wasm') &&
+        steps.wasm-tgz.outputs.cache-hit != 'true'
       shell: bash
       run: |
         brew install llvm
@@ -290,8 +334,17 @@ runs:
         rustup target add aarch64-linux-android armv7-linux-androideabi \
           i686-linux-android x86_64-linux-android
         # cargo-ndk >=4: the SDK bindings Makefile passes --link-libcxx-shared,
-        # which 3.x doesn't recognize.
-        cargo install cargo-ndk --locked --version '=4.1.2'
+        # which 3.x doesn't recognize. Prebuilt binary via cargo-binstall
+        # (seconds) instead of `cargo install` (compiled from source,
+        # ~1 min per cold run); binstall falls back to a source build
+        # when no release asset matches. Skipped when rust-cache already
+        # restored the right cargo-ndk into ~/.cargo/bin.
+        if ! cargo ndk --version 2>/dev/null | grep -q '4\.1\.2'; then
+          curl --retry 3 -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall -y cargo-ndk@4.1.2
+        fi
+        cargo ndk --version
 
     - name: Install iOS Rust targets (if ios requested)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'ios')
@@ -308,7 +361,15 @@ runs:
         for p in "${PLATFORMS[@]}"; do
           p="$(echo "$p" | xargs)"
           case "$p" in
-            wasm)    make sdk-wasm ;;
+            wasm)
+              # Present already = restored from the Linux warmer's
+              # OS-neutral tgz cache; a fresh clone never has it.
+              TGZ="$SPARK_SDK_DIR/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz"
+              if [[ -f "$TGZ" ]]; then
+                echo "WASM tgz already present (cross-OS restore) — skipping make sdk-wasm"
+              else
+                make sdk-wasm
+              fi ;;
             ios)     make sdk-ios ;;
             android) make sdk-android ;;
             "")      ;;
@@ -318,6 +379,21 @@ runs:
               ;;
           esac
         done
+
+    # Publish the freshly-built tgz under the OS-neutral key the macOS
+    # warmer restores from (see "Restore Linux-built WASM tgz" above).
+    # continue-on-error: a same-key reservation conflict (parallel
+    # warmers racing) must not fail an otherwise-good warm.
+    - name: Save WASM tgz for cross-OS reuse (Linux warmer)
+      if: >-
+        runner.os == 'Linux' &&
+        inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' &&
+        contains(inputs.platforms, 'wasm')
+      continue-on-error: true
+      uses: actions/cache/save@v5
+      with:
+        key: sdk-wasm-tgz-${{ steps.sdk-sha.outputs.sha }}
+        path: .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
 
     # Strip `DebugSymbolsPath` from the xcframework's Info.plist.
     #
