@@ -222,7 +222,13 @@ jobs:
           submodules: recursive
       - uses: ./.github/actions/setup-glow-app
         with:
-          platforms: wasm,android
+          # PR events warm wasm ONLY (~9 min): no PR job consumes the
+          # Android artifacts (`android` is dispatch-only, previews and
+          # releases are tag-gated), and a PR-scope cache dies with the
+          # PR — the ~28-min 4-ABI Android build there was pure waste.
+          # The canonical full set is built where it's consumed: main
+          # pushes (cache warming), tags, and dispatches.
+          platforms: ${{ github.event_name == 'pull_request' && 'wasm' || 'wasm,android' }}
           mode: warmer
       - uses: actions/setup-java@v5
         with:
@@ -243,13 +249,24 @@ jobs:
   warm-sdk-macos:
     name: Warm SDK cache (macOS — wasm + ios)
     runs-on: macos-15
-    needs: [validate-inputs, preflight]
+    # warm-sdk-linux is in needs: so the Linux-built WASM tgz (saved
+    # under an OS-neutral cache key) is available for cross-OS restore
+    # before this job builds — the macOS warmer then skips Homebrew
+    # LLVM + `make sdk-wasm` entirely (~8 macOS min ≈ 80 billed-min at
+    # 10× billing). Cold-path wall time serializes behind the Linux
+    # warmer, which only matters on the already-documented "tag pushed
+    # seconds after merge" race; on main pushes nobody is waiting. When
+    # warm-sdk-linux SKIPS (iOS-only dispatch) the tgz restore misses
+    # and setup-glow-app falls back to building wasm locally — the
+    # pre-optimization behavior, not a failure.
+    needs: [validate-inputs, preflight, warm-sdk-linux]
     timeout-minutes: 60
     # `!cancelled()` bypasses the default-skip cascade from
     # validate-inputs (dispatch-only). See warm-sdk-linux for rationale.
     if: >-
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
+      needs.warm-sdk-linux.result != 'failure' &&
       needs.preflight.outputs.ios-cache-hit != 'true' &&
       ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
        contains(github.event.pull_request.labels.*.name, 'run-ios') ||
