@@ -271,22 +271,46 @@ work lives in `.github/` plus small accommodations in `Makefile`,
 
 ### CI workflows
 
-- `.github/workflows/ci.yml` — four jobs:
+- `.github/workflows/ci.yml` — build-on-demand trigger model:
   - `web` (ubuntu) — `tsc --noEmit` + `npm run lint` + `npm run
     test` against the submodule's pinned SHA. Runs on every PR.
   - `android` (ubuntu) — `gradle :app:assembleDebug`, uploads
     the APK artifact (7d retention) + Gradle reports on failure.
-    Runs on every PR.
+    Dispatch-only (target=android|both, distribution=none).
   - `ios` (macos-15) — unsigned `xcodebuild` device build.
     Label-gated on PRs via the `run-ios` label to contain
-    macOS-minute burn; always runs on `main` pushes, `preview-*`
-    / `rc-*` tags, and `workflow_dispatch`.
+    macOS-minute burn; also on `workflow_dispatch`
+    (target=ios|both, distribution=none). Not on tag pushes
+    (ios-preview / ios-release cover those).
   - `ios-preview` (macos-15) — Ad Hoc signed IPA uploaded to
     Firebase App Distribution via fastlane's
     `firebase_app_distribution` plugin (`:upload_firebase` lane).
     Tag-triggered (`preview-*` / `rc-*`) + manually dispatchable
     via `workflow_dispatch`. Delivers to the `internal` tester
     group. Not on every main push.
+
+### SDK cache warming + release-tag timing
+
+Pushes to `main` run ONLY the SDK cache warmers (`warm-sdk-linux`
++ `warm-sdk-macos`), no consumer jobs, no artifacts. GitHub cache
+scoping lets any run restore default-branch caches but never a
+sibling branch's, another tag's, or a PR's, so main is the
+canonical warm-cache holder every ref inherits from (PR #85).
+Consequences:
+
+- **Cut release/preview tags only after the post-merge main CI
+  run finishes.** A tag pushed seconds after merging an SDK pin
+  bump races the ~40-min cold warm and rebuilds the SDK from
+  scratch inside the release pipeline (rc-1 of 0.1.0 did exactly
+  this). Seconds-cheap when the pin didn't change.
+- PR warmers build wasm only (nothing on a PR consumes Android
+  artifacts); full wasm+android / wasm+ios sets are built on main
+  pushes, tags, and dispatches. The macOS warmer reuses the
+  Linux-built WASM tgz cross-OS instead of rebuilding it.
+- `.github/workflows/cache-maintenance.yml` deletes closed-PR
+  caches (quota hygiene) and touches main's SDK caches Mon+Thu
+  so the 7-day inactivity eviction can't discard them between
+  release cycles.
 - `.github/dependabot.yml` — weekly update PRs for npm (glow-app
   root + glow-web + both in-house plugins), Gradle (Android),
   and `github-actions`. `@capacitor/keyboard` and

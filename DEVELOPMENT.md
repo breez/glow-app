@@ -722,6 +722,13 @@ Once H1–H8 (Play app, ASC app, upload keystore, iOS cert + app-store
 profile, ASC API key or legacy Apple ID creds, Firebase app ids)
 are in place:
 
+**Before tagging, wait for the post-merge main CI run to finish**
+(Actions → CI, event `push` on `main`). Every main push warms the
+SDK caches that tag builds restore from; tagging before that run
+completes (~40 min cold after an SDK pin bump, well under a minute
+otherwise) forces the release pipeline to rebuild the SDK from
+scratch instead of inheriting main's cache.
+
 ```bash
 git checkout main && git pull
 git tag release-0.X.Y
