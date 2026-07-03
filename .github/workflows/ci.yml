@@ -170,7 +170,7 @@ jobs:
       - name: Probe macOS SDK artifact cache
         id: probe
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           # Key must match warm-sdk-macos exactly. runner.os=macOS there;
           # hardcoded here since we're probing from Linux.
