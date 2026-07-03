@@ -1,0 +1,104 @@
+name: Cache maintenance
+
+# Two housekeeping duties around GitHub's cache limits (the repo runs
+# at ~99% of the 10 GB quota; LRU eviction from overflow would delete
+# main's canonical SDK caches and silently re-trigger ~40-min warms):
+#
+#   1. PR-close cleanup — caches saved by pull_request runs live under
+#      refs/pull/N/merge, a scope only re-runs of that same PR can
+#      restore from. Once the PR closes they are dead weight against
+#      the quota (a single warmer run saves ~1.7 GB). Delete eagerly.
+#
+#   2. Keep-alive — GitHub evicts caches not accessed for 7 days.
+#      Main's SDK artifact caches are the copies every branch, PR, and
+#      tag restores from, but between release cycles main can sit
+#      quiet longer than a week. Restoring them twice a week bumps
+#      last_accessed so a lull doesn't cost a full re-warm. Only the
+#      sdk-artifacts keys are touched: rust-cache entries are cheap to
+#      lose (the warmer rebuilds incrementally from scratch or from a
+#      stale base), and their exact keys embed lockfile/env hashes
+#      this workflow can't reproduce.
+
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    # Mon + Thu 06:20 UTC — max gap 4 days, safely inside the 7-day
+    # eviction window. Off the whole hour to dodge cron load spikes.
+    - cron: '20 6 * * 1,4'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup-pr-caches:
+    name: Delete closed-PR caches
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Cache deletion needs actions:write; nothing else here does.
+      actions: write
+      contents: read
+    steps:
+      - name: Delete all caches scoped to the closed PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: refs/pull/${{ github.event.pull_request.number }}/merge
+        run: |
+          set -euo pipefail
+          deleted=0
+          while :; do
+            ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/caches?ref=$REF&per_page=100" \
+              --jq '.actions_caches[].id')
+            [[ -z "$ids" ]] && break
+            for id in $ids; do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/caches/$id" >/dev/null
+              deleted=$((deleted + 1))
+            done
+          done
+          echo "Deleted $deleted cache entries for $REF"
+
+  keepalive-sdk-caches:
+    name: Keep main's SDK caches alive
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read pinned SDK SHA
+        id: sdk-sha
+        # Same grep as setup-glow-app — divergence would touch the
+        # wrong key and let the real one expire.
+        run: |
+          echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Touch Linux SDK artifact cache
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          # Key + paths must mirror setup-glow-app verbatim — the cache
+          # version hash is derived from the paths string, so drift
+          # here means a silent lookup miss, not an error.
+          key: sdk-artifacts-Linux-${{ steps.sdk-sha.outputs.sha }}
+          path: |
+            .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+            .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
+            ~/.m2/repository/breez_sdk_spark
+
+      - name: Touch macOS SDK artifact cache
+        # Cross-OS restore from a Linux runner is fine: the version
+        # hash is paths + compression (zstd on both OSes), and the
+        # DOWNLOAD is what bumps last_accessed. Extraction quirks from
+        # the macOS-built archive are shielded by continue-on-error —
+        # by then the access is already recorded.
+        continue-on-error: true
+        uses: actions/cache/restore@v5
+        with:
+          key: sdk-artifacts-macOS-${{ steps.sdk-sha.outputs.sha }}
+          path: |
+            .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
+            .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
+            ~/.m2/repository/breez_sdk_spark

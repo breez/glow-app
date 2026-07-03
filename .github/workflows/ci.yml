@@ -2,7 +2,13 @@ name: CI
 
 # Trigger model (build-on-demand):
 #   - PR open/push → `web` only (tsc + lint + vitest, ~3 min Linux).
-#   - main push    → no CI. Artifacts only on explicit intent.
+#   - main push    → SDK cache warmers ONLY (no consumer jobs, no
+#                    artifacts). GitHub cache scoping lets every branch,
+#                    PR, and tag restore default-branch caches but never
+#                    each other's — main must hold the canonical warm
+#                    caches or every tag push cold-rebuilds ~40 min of
+#                    SDK artifacts that already exist in a sibling scope
+#                    (release-0.1.0 paid this three times).
 #   - release-* tag → full release pipeline (AAB → Play Internal + IPA →
 #                     TestFlight + GitHub Release).
 #   - preview-* / rc-* tag → Firebase App Distribution uploads.
@@ -10,6 +16,11 @@ name: CI
 # Trade-off: a broken Android/iOS build could merge to main undetected —
 # the release-tag path catches it before artifacts reach users. See
 # DEVELOPMENT.md "CI dispatch reference" for the preset table.
+#
+# Release-cutting note: tag pushes inherit main's warm cache only if the
+# post-merge warm run has FINISHED. A tag pushed seconds after merging a
+# pin bump races a ~40-min cold warm and rebuilds on its own — cut tags
+# after the main-push CI run completes.
 on:
   pull_request:
     paths-ignore:
@@ -18,9 +29,10 @@ on:
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
   push:
-    # Note: `branches: [main]` intentionally NOT listed — main pushes
-    # run no CI. Release & preview tag pushes are the only auto-triggers
-    # that build artifacts.
+    # main pushes exist solely to populate the default-branch cache
+    # scope — the warm-sdk-* jobs' `if:` conditions are the gate that
+    # keeps every consumer job off this event.
+    branches: [main]
     tags: ['preview-*', 'rc-*', 'release-*']
   workflow_dispatch:
     inputs:
@@ -67,9 +79,12 @@ on:
 
 # Cancel superseded runs on the same PR / branch. Matches the glow-web
 # pattern and saves ~15–25% of minute burn on busy PRs (especially
-# iOS, which is the expensive job).
+# iOS, which is the expensive job). event_name is in the group so a
+# main-push warm run can't cancel an in-flight workflow_dispatch build
+# from main (both share ref refs/heads/main); same-event supersession
+# (PR pushes, repeated dispatches) still cancels as before.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Least-privilege default. Jobs that need more (release-github writes
@@ -132,7 +147,10 @@ jobs:
     timeout-minutes: 2
     # Independent of validate-inputs — the probe is harmless on a
     # failed-validation dispatch (warm-sdk-macos is the fail-fast point).
+    # On main pushes the probe also gates warm-sdk-macos: once main's
+    # scope holds the current pin, repeat pushes skip the macOS runner.
     if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       contains(github.event.pull_request.labels.*.name, 'run-ios') ||
       startsWith(github.ref, 'refs/tags/') ||
       (github.event_name == 'workflow_dispatch' &&
@@ -193,6 +211,7 @@ jobs:
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       (github.event_name == 'pull_request' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
         (contains(fromJSON('["android","both"]'), inputs.target) ||
@@ -232,7 +251,8 @@ jobs:
       !cancelled() &&
       needs.validate-inputs.result != 'failure' &&
       needs.preflight.outputs.ios-cache-hit != 'true' &&
-      (contains(github.event.pull_request.labels.*.name, 'run-ios') ||
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+       contains(github.event.pull_request.labels.*.name, 'run-ios') ||
        startsWith(github.ref, 'refs/tags/') ||
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target)))

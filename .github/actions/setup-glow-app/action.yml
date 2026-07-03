@@ -185,14 +185,20 @@ runs:
       run: ./scripts/resolve-spark-sdk.sh
 
     # Second-line cache: Rust target/ directory for incremental
-    # rebuilds when the artifact cache missed but Cargo.lock is
-    # unchanged (e.g., cache eviction without a SDK bump).
+    # rebuilds when the artifact cache missed. `shared-key` (NOT `key`)
+    # keeps the cache name stable across .spark-sdk-ref bumps:
+    # rust-cache appends the Cargo.lock hash to the primary key and
+    # falls back to a prefix restore-key on miss, so a pin bump
+    # restores the previous pin's target/ as a stale base and only
+    # recompiles what changed. The old scheme embedded the SDK SHA in
+    # `key`, which lands in the NON-hashed base of both the cache key
+    # AND the restore-key — every pin bump was a fully cold build.
     - name: Rust compile cache (fallback on artifact-cache miss)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ../spark-sdk
-        key: ${{ steps.sdk-sha.outputs.platforms_slug }}-${{ steps.sdk-sha.outputs.sha }}
+        shared-key: warm-${{ steps.sdk-sha.outputs.platforms_slug }}
 
     # Toolchain pieces needed to build the SDK from source on a
     # cold cache. The `make sdk-*` targets invoke cargo + wasm-pack
@@ -290,8 +296,17 @@ runs:
         rustup target add aarch64-linux-android armv7-linux-androideabi \
           i686-linux-android x86_64-linux-android
         # cargo-ndk >=4: the SDK bindings Makefile passes --link-libcxx-shared,
-        # which 3.x doesn't recognize.
-        cargo install cargo-ndk --locked --version '=4.1.2'
+        # which 3.x doesn't recognize. Prebuilt binary via cargo-binstall
+        # (seconds) instead of `cargo install` (compiled from source,
+        # ~1 min per cold run); binstall falls back to a source build
+        # when no release asset matches. Skipped when rust-cache already
+        # restored the right cargo-ndk into ~/.cargo/bin.
+        if ! cargo ndk --version 2>/dev/null | grep -q '4\.1\.2'; then
+          curl --retry 3 -L --proto '=https' --tlsv1.2 -sSf \
+            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          cargo binstall -y cargo-ndk@4.1.2
+        fi
+        cargo ndk --version
 
     - name: Install iOS Rust targets (if ios requested)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'ios')
