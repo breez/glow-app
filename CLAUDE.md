@@ -333,8 +333,10 @@ artifact cache:
 1. `actions/cache@v4` caches the **output artifacts** (iOS
    xcframework + generated Swift sources,
    `~/.m2/repository/breez_sdk_spark` for Android, and the
-   WASM tgz) keyed on `runner.os + platforms + SHA`. Cache
-   hit → `make sdk-*` is skipped entirely.
+   WASM tgz) keyed on `runner.os + NDK version + SDK SHA`
+   (the NDK version is in the key because the Android
+   artifacts embed the NDK's libc++_shared.so prebuilt, see
+   issue #86). Cache hit → `make sdk-*` is skipped entirely.
 2. `Swatinem/rust-cache@v2` as a second-line fallback keyed on
    the same SHA; makes `target/` rebuilds incremental on
    cache-miss cold runs.

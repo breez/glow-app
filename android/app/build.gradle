@@ -93,6 +93,13 @@ android {
             signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Embed native-lib symbol tables in the AAB so Play vitals
+            // can symbolicate crashes in the Rust SDK libs (Play warns
+            // on every upload without them). SYMBOL_TABLE gives
+            // function-level stacks without FULL's DWARF size cost.
+            ndk {
+                debugSymbolLevel 'SYMBOL_TABLE'
+            }
         }
     }
 }
