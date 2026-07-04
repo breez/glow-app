@@ -1,5 +1,5 @@
 diff --git a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
-index c84923c..58fc538 100644
+index c84923c..b498343 100644
 --- a/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
 +++ b/node_modules/@capacitor/android/capacitor/src/main/java/com/getcapacitor/plugin/SystemBars.java
 @@ -181,8 +181,22 @@ public class SystemBars extends Plugin {
@@ -44,3 +44,25 @@ index c84923c..58fc538 100644
              );
  
              // Returning `WindowInsetsCompat.CONSUMED` breaks recalculation of safe area insets
+@@ -224,6 +240,21 @@ public class SystemBars extends Plugin {
+ 
+             return newInsets;
+         });
++
++        // PATCH (glow-app): the launch-time inset dispatches can run while
++        // the navigation-bar inset source is still transition-controlled
++        // (it reports bottom=0 during the app-open animation), and no
++        // later dispatch corrects the injected --safe-area-inset-* CSS
++        // variables until an external inset event (rotation / IME). Ask
++        // for a fresh dispatch whenever the window gains focus: the first
++        // focus gain lands after the launch transition settles, and later
++        // ones cover returning from background / system dialogs.
++        View parent = (View) getBridge().getWebView().getParent();
++        parent.getViewTreeObserver().addOnWindowFocusChangeListener(hasFocus -> {
++            if (hasFocus) {
++                parent.requestApplyInsets();
++            }
++        });
+     }
+ 
+     private void injectSafeAreaCSS(int top, int right, int bottom, int left) {
