@@ -41,5 +41,13 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarColor">@color/spark_dark</item>
         <item name="android:windowLightNavigationBar">false</item>
+        <!-- Android 12+ composes its own system splash over the launch
+             window and takes its background from the splash-screen
+             theme attribute alone; it cannot lift a color from the
+             @drawable window background, so without this it falls back
+             to the system Light/Dark default and flashes a light
+             canvas in Light mode. Theme.SplashScreen applies this on
+             API 31+ and emulates it below. -->
+        <item name="windowSplashScreenBackground">@color/spark_dark</item>
     </style>
 </resources>
