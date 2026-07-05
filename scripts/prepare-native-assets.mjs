@@ -40,7 +40,7 @@ const rootDir = join(__dirname, '..');
 const SOURCE_LOGO = join(rootDir, 'glow-web/public/assets/Glow_Logo.svg');
 const SVG_RASTER_DENSITY = 600;
 const OUTPUT_DIR = join(rootDir, 'resources');
-const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (matches HomePage)
+const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (spark_dark, matches HomePage)
 
 // Target canvas sizes
 const ICON_SIZE = 1024;
@@ -48,9 +48,10 @@ const SPLASH_SIZE = 2732;
 // Android cold-launch splash logo target size (xhdpi baseline).
 // Used by the layer-list `splash_window` drawable that the launch
 // theme points at — Android's per-density auto-scaling lands the
-// logo at consistent logical dp on every device, roughly matching
-// HomePage's <GlowLogo sizePx={144}> on a 393-wide screen.
-const SPLASH_LOGO_SIZE = 290;
+// logo at consistent logical dp on every device (~210dp, larger
+// than HomePage's <GlowLogo sizePx={144}> so the cold-launch mark
+// reads clearly on its own).
+const SPLASH_LOGO_SIZE = 420;
 
 // Logo occupancy on each canvas (as a fraction of the canvas size).
 // Values are tuned for the trimmed SVG content (no transparent margin),
