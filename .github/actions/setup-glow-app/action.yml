@@ -64,6 +64,14 @@ runs:
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
         echo "SPARK_SDK_DIR=$GITHUB_WORKSPACE/.spark-sdk-checkout" >> "$GITHUB_ENV"
         echo "platforms_slug=$(echo '${{ inputs.platforms }}' | tr ',' '-')" >> "$GITHUB_OUTPUT"
+        # Single source of truth for the Android NDK version: feeds the
+        # sdkmanager install, ANDROID_NDK_HOME, and the SDK artifact cache
+        # keys, so bumping it here rolls all of them together. r28+ is
+        # required: its prebuilt libc++_shared.so (copied into the
+        # bindings-android AAR by cargo-ndk --link-libcxx-shared) is 16 KB
+        # page-aligned, which Play mandates for 64-bit ABIs (issue #86).
+        # r26/r27 prebuilts are 4 KB-aligned and fail the Play check.
+        echo "ndk=28.2.13676358" >> "$GITHUB_OUTPUT"
 
     # Create a compat symlink at $GITHUB_WORKSPACE/../spark-sdk →
     # $GITHUB_WORKSPACE/.spark-sdk-checkout so downstream tooling with
@@ -95,11 +103,16 @@ runs:
           echo "Compat symlink: $LINK → $TARGET"
         fi
 
-    # Unified cache key per (OS, SHA) — warmer and consumer share it
+    # Unified cache key per (OS, NDK, SHA) — warmer and consumer share it
     # verbatim. Previous platforms-slug scheme caused cache-miss for
     # consumers requesting `wasm` when the warmer saved `wasm+android`;
     # GitHub's restore-keys are prefix-matched, not suffix-matched,
     # so full alternate keys never matched.
+    #
+    # The NDK version is part of the key because the cached Android
+    # artifacts embed the NDK's libc++_shared.so prebuilt. Without it,
+    # an NDK bump would keep restoring .so files copied from the old
+    # NDK (the exact staleness that shipped 4 KB-aligned libs, #86).
     #
     # Warmer mode: actions/cache (read+write). Builds whatever the
     # caller's `platforms` input lists on miss, saves cache on success.
@@ -112,7 +125,7 @@ runs:
       id: sdk-artifacts-cache-warmer
       uses: actions/cache@v5
       with:
-        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
+        key: sdk-artifacts-${{ runner.os }}-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
           .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
           .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
@@ -123,7 +136,7 @@ runs:
       id: sdk-artifacts-cache-consumer
       uses: actions/cache/restore@v5
       with:
-        key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}
+        key: sdk-artifacts-${{ runner.os }}-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}
         path: |
           .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
           .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
@@ -152,7 +165,7 @@ runs:
       shell: bash
       run: |
         echo "::error::SDK artifact cache MISS in consumer mode. The warm-sdk-${{ runner.os }} job should have populated the cache BEFORE this job started. Check whether the warmer succeeded for SHA ${{ steps.sdk-sha.outputs.sha }}."
-        echo "Expected key: sdk-artifacts-${{ runner.os }}-${{ steps.sdk-sha.outputs.sha }}"
+        echo "Expected key: sdk-artifacts-${{ runner.os }}-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}"
         exit 1
 
     # Wipe any stale `.spark-sdk-checkout/` before cloning fresh on a
@@ -193,6 +206,14 @@ runs:
     # recompiles what changed. The old scheme embedded the SDK SHA in
     # `key`, which lands in the NON-hashed base of both the cache key
     # AND the restore-key — every pin bump was a fully cold build.
+    #
+    # The NDK version is deliberately NOT in shared-key (unlike the
+    # artifact cache above): a stale target/ can't leak old-NDK output.
+    # rust-cache drops workspace-crate artifacts on save, so the final
+    # .so link always re-runs with the current NDK's linker; cc-built C
+    # objects rebuild because the CC/CFLAGS env embeds the NDK path; and
+    # libc++_shared.so never enters this cache (cargo-ndk copies it
+    # from the live NDK install on every build).
     - name: Rust compile cache (fallback on artifact-cache miss)
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true'
       uses: Swatinem/rust-cache@v2
@@ -321,16 +342,16 @@ runs:
       uses: android-actions/setup-android@v3
       with:
         cmdline-tools-version: 11076708
-        # Pre-accept licenses + install NDK 26 (matches what the
-        # spark-sdk Android Gradle build expects) in one shot,
+        # Pre-accept licenses + install the pinned NDK (see the `ndk`
+        # output in the sdk-sha step for why r28+) in one shot,
         # avoiding the `yes | sdkmanager` broken-pipe fragility.
-        packages: "ndk;26.1.10909125 build-tools;34.0.0 platform-tools"
+        packages: "ndk;${{ steps.sdk-sha.outputs.ndk }} build-tools;34.0.0 platform-tools"
 
     - name: Expose ANDROID_NDK_HOME + install cargo-ndk + Android Rust targets
       if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
       shell: bash
       run: |
-        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> "$GITHUB_ENV"
+        echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ steps.sdk-sha.outputs.ndk }}" >> "$GITHUB_ENV"
         rustup target add aarch64-linux-android armv7-linux-androideabi \
           i686-linux-android x86_64-linux-android
         # cargo-ndk >=4: the SDK bindings Makefile passes --link-libcxx-shared,
