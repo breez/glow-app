@@ -64,14 +64,15 @@ runs:
         echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
         echo "SPARK_SDK_DIR=$GITHUB_WORKSPACE/.spark-sdk-checkout" >> "$GITHUB_ENV"
         echo "platforms_slug=$(echo '${{ inputs.platforms }}' | tr ',' '-')" >> "$GITHUB_OUTPUT"
-        # Single source of truth for the Android NDK version: feeds the
+        # NDK pin from .android-ndk-version (repo root): feeds the
         # sdkmanager install, ANDROID_NDK_HOME, and the SDK artifact cache
-        # keys, so bumping it here rolls all of them together. r28+ is
-        # required: its prebuilt libc++_shared.so (copied into the
-        # bindings-android AAR by cargo-ndk --link-libcxx-shared) is 16 KB
-        # page-aligned, which Play mandates for 64-bit ABIs (issue #86).
-        # r26/r27 prebuilts are 4 KB-aligned and fail the Play check.
-        echo "ndk=28.2.13676358" >> "$GITHUB_OUTPUT"
+        # keys. ci.yml's preflight probe and cache-maintenance's keep-alive
+        # read the same file — their keys must match the ones built here
+        # verbatim. r28+ is required: its prebuilt libc++_shared.so (copied
+        # into the bindings-android AAR by cargo-ndk --link-libcxx-shared)
+        # is 16 KB page-aligned, which Play mandates for 64-bit ABIs
+        # (issue #86). r26/r27 prebuilts are 4 KB-aligned and fail Play.
+        echo "ndk=$(grep -vE '^\s*(#|$)' .android-ndk-version | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
     # Create a compat symlink at $GITHUB_WORKSPACE/../spark-sdk →
     # $GITHUB_WORKSPACE/.spark-sdk-checkout so downstream tooling with

@@ -74,6 +74,7 @@ jobs:
         # wrong key and let the real one expire.
         run: |
           echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+          echo "ndk=$(grep -vE '^\s*(#|$)' .android-ndk-version | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
       - name: Touch Linux SDK artifact cache
         continue-on-error: true
@@ -82,7 +83,7 @@ jobs:
           # Key + paths must mirror setup-glow-app verbatim — the cache
           # version hash is derived from the paths string, so drift
           # here means a silent lookup miss, not an error.
-          key: sdk-artifacts-Linux-${{ steps.sdk-sha.outputs.sha }}
+          key: sdk-artifacts-Linux-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}
           path: |
             .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
             .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
@@ -97,7 +98,7 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          key: sdk-artifacts-macOS-${{ steps.sdk-sha.outputs.sha }}
+          key: sdk-artifacts-macOS-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}
           path: |
             .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
             .spark-sdk-checkout/crates/breez-sdk/bindings/langs/swift
