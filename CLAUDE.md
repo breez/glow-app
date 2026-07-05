@@ -261,6 +261,11 @@ work lives in `.github/` plus small accommodations in `Makefile`,
   pinned spark-sdk commit SHA. One SHA per line; `#` lines are
   comments. Bump the SHA when glow-app needs a newer SDK commit
   (normally in its own `chore(sdk):` commit).
+- `.android-ndk-version` — CI NDK pin at repo root. Read by
+  `setup-glow-app` (install + cache keys), ci.yml's preflight probe,
+  and cache-maintenance's keep-alive, so the cache-key sites cannot
+  drift from the installed NDK. Bump here only; see issue #86 for the
+  16 KB alignment floor (r28+).
 - `scripts/resolve-spark-sdk.sh` — idempotent. Clones spark-sdk
   at the pin into `../spark-sdk/` when missing; verifies the
   HEAD matches when present. `SPARK_SDK_ALLOW_DRIFT=1` bypasses

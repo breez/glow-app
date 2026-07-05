@@ -166,15 +166,19 @@ jobs:
         # any divergence shapes a miss-shaped hash and defeats this probe.
         run: |
           echo "sha=$(grep -vE '^\s*(#|$)' .spark-sdk-ref | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+          echo "ndk=$(grep -vE '^\s*(#|$)' .android-ndk-version | head -n 1 | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
 
       - name: Probe macOS SDK artifact cache
         id: probe
         continue-on-error: true
         uses: actions/cache/restore@v5
         with:
-          # Key must match warm-sdk-macos exactly. runner.os=macOS there;
-          # hardcoded here since we're probing from Linux.
-          key: sdk-artifacts-macOS-${{ steps.sdk-sha.outputs.sha }}
+          # Key must match warm-sdk-macos exactly (runner.os=macOS there,
+          # hardcoded here since we're probing from Linux). The NDK segment
+          # comes from .android-ndk-version, same as setup-glow-app —
+          # probing the old ndk-less key once skipped the macOS warmer
+          # while consumers missed on the real key (preview-20260705).
+          key: sdk-artifacts-macOS-ndk${{ steps.sdk-sha.outputs.ndk }}-${{ steps.sdk-sha.outputs.sha }}
           # Paths are required syntactically but unused under lookup-only.
           path: |
             .spark-sdk-checkout/packages/wasm/breeztech-breez-sdk-spark-v0.1.0.tgz
