@@ -57,14 +57,17 @@ const SPLASH_LOGO_SIZE = 290;
 // so they land on the visible logo's bounding box rather than the
 // SVG viewBox.
 const ICON_LOGO_FRACTION = 0.75;       // Full app icon: logo fills ~75% of the canvas
-// Android's nominal 66% safe zone yields ~63% effective visible area
-// after the launcher mask, which puts a 0.66 logo right against the
-// visible mask edge (rays touching the border). Drop well below the
-// safe zone so the radiating rays land with comfortable breathing
-// room inside the mask regardless of launcher shape. The trade-off
-// is the icon reads slightly smaller than its peers, but that's
-// preferable to clipping or edge-hugging on the gradient rays.
-const FOREGROUND_LOGO_FRACTION = 0.50; // Adaptive icon foreground
+// Match the PWA maskable icon's visual presence (issue #88): at 0.50
+// the starburst floated in the dark field and read smaller, softer,
+// and flatter than the web icon, whose rays run out to the mask edge.
+// Android's nominal 66/108 safe zone is ~63% effective after launcher
+// masks. Measured on the trimmed render, the longest ray tip stays
+// inside a round launcher mask (72/108 of the canvas) only up to
+// ~0.58; at 0.58 it sits tangent to the rim, the near-edge look the
+// PWA icon has, and anything higher cuts it. Treat 0.58 as a measured
+// ceiling; re-run the circular-mask preview from issue #88 before
+// raising it.
+const FOREGROUND_LOGO_FRACTION = 0.58; // Adaptive icon foreground
 // Match HomePage's <GlowLogo sizePx={144}> on-screen size (~37% of a
 // 393-wide phone). This requires androidScaleType=FIT_CENTER (set in
 // capacitor.config.ts) so the splash drawable doesn't get stretched
@@ -128,8 +131,8 @@ async function main() {
   });
   console.log(`  ✓ icon-only.png (${ICON_SIZE}x${ICON_SIZE}, logo ${Math.round(ICON_LOGO_FRACTION * 100)}%, transparent)`);
 
-  // icon-foreground.png: 1024x1024 transparent canvas with the logo at 66%
-  // (adaptive icon safe zone). @capacitor/assets composites this onto the
+  // icon-foreground.png: 1024x1024 transparent canvas with the logo at
+  // FOREGROUND_LOGO_FRACTION. @capacitor/assets composites this onto the
   // background color from --iconBackgroundColor.
   await createCenteredLogo({
     canvasSize: ICON_SIZE,
