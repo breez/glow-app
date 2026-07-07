@@ -103,7 +103,7 @@ web: ## Build glow-web (uses glow-web's vendored SDK tarball; see SDK_WASM_TGZ c
 sync: ## Copy web assets to native projects (without regenerating native configs)
 	npx cap copy
 
-assets: ## Regenerate native app icons and splash from glow-web/public/assets/Glow_Logo.png
+assets: ## Regenerate native app icons and splash from glow-web/public/assets/Glow_Logo.svg
 	node scripts/prepare-native-assets.mjs
 	npx capacitor-assets generate --ios --android \
 		--iconBackgroundColor '#0a0a0f' \
@@ -128,16 +128,22 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 			'    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>' \
 			'</adaptive-icon>' > "$$f"; \
 	done
-	@# Android cold-launch splash: copy the script-emitted splash_logo.png
-	@# into drawable-xhdpi/ and write the layer-list drawable that
-	@# styles.xml's launch theme points at (@drawable/splash_window).
-	@# Without this layer-list wrapper, a raw bitmap as the window
-	@# background gets stretched to fill the (typically tall portrait)
-	@# window — which is what the user previously saw as a vertically-
-	@# stretched logo for ~50ms before the @capacitor/splash-screen
-	@# plugin took over.
-	@mkdir -p android/app/src/main/res/drawable-xhdpi
-	@cp resources/splash_logo.png android/app/src/main/res/drawable-xhdpi/splash_logo.png
+	@# Android cold-launch splash: copy the script-emitted per-density
+	@# splash_logo and splash_icon PNGs into drawable-<density>/ and
+	@# write the layer-list drawable that styles.xml's launch theme
+	@# points at (@drawable/splash_window). Without the layer-list
+	@# wrapper, a raw bitmap as the window background gets stretched to
+	@# fill the (typically tall portrait) window; without per-density
+	@# copies, Android upscales a single mid-density bitmap 1.5x/2x on
+	@# xxhdpi/xxxhdpi devices and the logo renders blurry. splash_icon
+	@# feeds windowSplashScreenAnimatedIcon in styles.xml, the Android
+	@# 12+ system splash that is what the user actually watches for
+	@# launchShowDuration on modern devices.
+	@for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do \
+		mkdir -p "android/app/src/main/res/drawable-$$d"; \
+		cp "resources/splash_logo-$$d.png" "android/app/src/main/res/drawable-$$d/splash_logo.png"; \
+		cp "resources/splash_icon-$$d.png" "android/app/src/main/res/drawable-$$d/splash_icon.png"; \
+	done
 	@printf '%s\n' \
 		'<?xml version="1.0" encoding="utf-8"?>' \
 		'<layer-list xmlns:android="http://schemas.android.com/apk/res/android">' \
@@ -146,6 +152,17 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 		'        <bitmap android:src="@drawable/splash_logo" android:gravity="center" />' \
 		'    </item>' \
 		'</layer-list>' > android/app/src/main/res/drawable/splash_window.xml
+	@# Drop the capacitor-assets Android splash PNGs (~1.5 MB of APK).
+	@# No launch path draws them: Android 12+ shows the system splash
+	@# (splash_icon), older releases show the splash_window window
+	@# background, and the plugin's non-Android-12 fallback is pointed
+	@# at splash_logo via androidSplashResourceName in
+	@# capacitor.config.ts.
+	@rm -f android/app/src/main/res/drawable/splash.png \
+		android/app/src/main/res/drawable-land-*/splash.png \
+		android/app/src/main/res/drawable-port-*/splash.png
+	@rmdir android/app/src/main/res/drawable-land-* \
+		android/app/src/main/res/drawable-port-* 2>/dev/null || true
 
 strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework Info.plist
 	@# spark-sdk's xcframework Info.plist declares `DebugSymbolsPath=dSYMs`
