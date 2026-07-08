@@ -136,7 +136,8 @@ architecture-level pointer list a maintainer needs to navigate the code.
   by a `make assets` post-step; no launch path draws them):
   `splash_icon` (288dp, `windowSplashScreenAnimatedIcon`, the Android
   12+ system splash shown for `launchShowDuration`), `splash_logo`
-  (210dp, inside the `splash_window` layer-list window background for
+  (110dp, matching the PWA splash as measured on-device, inside the
+  `splash_window` layer-list window background for
   pre-12 launches), and the same `splash_logo` as the plugin's
   fallback drawable (`androidSplashResourceName` + `CENTER` scale in
   `capacitor.config.ts`). Per-density output matters: a single

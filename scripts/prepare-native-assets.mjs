@@ -54,9 +54,10 @@ const SPLASH_SIZE = 2732;
 // Android cold-launch splash logo logical size in dp, emitted once per
 // density bucket. A single mid-density asset is not enough: Android
 // upscales it 1.5x/2x on xxhdpi/xxxhdpi devices, which reads as a
-// soft, blurry logo. 210dp is larger than HomePage's
-// <GlowLogo sizePx={144}> so the cold-launch mark reads clearly.
-const SPLASH_LOGO_DP = 210;
+// soft, blurry logo. 110dp matches the PWA splash logo as measured
+// on-device (Chrome renders the manifest icon at ~110dp visible),
+// keeping the native cold launch visually consistent with the PWA.
+const SPLASH_LOGO_DP = 110;
 
 // Android 12+ system splash icon (windowSplashScreenAnimatedIcon in
 // styles.xml). Without an explicit icon the system falls back to the
