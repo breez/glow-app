@@ -130,7 +130,7 @@ class NativeVaultPlugin : Plugin() {
         // auth state for the next [KEY_AUTH_GRACE_SECONDS] seconds.
         biometric.authenticate(
             activity = hostActivity,
-            title = "Protect your Glow wallet",
+            title = "Protect Glow",
             subtitle = "Use your biometric credential to enable quick wallet unlock",
             cancelLabel = "Cancel",
             onSuccess = {
@@ -221,7 +221,7 @@ class NativeVaultPlugin : Plugin() {
         // fresh cipher.
         biometric.authenticate(
             activity = hostActivity,
-            title = "Unlock Glow wallet",
+            title = "Unlock Glow",
             subtitle = "Use your biometric credential to access your wallet",
             cancelLabel = "Cancel",
             onSuccess = {

@@ -97,7 +97,7 @@ final class KeychainSeedVault: SeedVaultProviding {
         // Provide a LAContext with our custom prompt copy so the
         // first-time store shows the right label.
         let writeContext = LAContext()
-        writeContext.localizedReason = "Protect your Glow wallet with biometric unlock"
+        writeContext.localizedReason = "Protect Glow with biometric unlock"
         addQuery[kSecUseAuthenticationContext as String] = writeContext
 
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
@@ -119,7 +119,7 @@ final class KeychainSeedVault: SeedVaultProviding {
         // would happen because the biometric evaluation can't get off
         // the ground.
         let readContext = LAContext()
-        readContext.localizedReason = "Unlock your Glow wallet"
+        readContext.localizedReason = "Unlock Glow"
 
         var policyError: NSError?
         let canEvaluate = readContext.canEvaluatePolicy(
@@ -140,7 +140,7 @@ final class KeychainSeedVault: SeedVaultProviding {
 
         // F3: the biometric prompt is triggered inline by the Keychain
         // call itself. Provide the pre-validated LAContext so users see
-        // "Unlock your Glow wallet" instead of the default generic
+        // "Unlock Glow" instead of the default generic
         // system text.
         query[kSecUseAuthenticationContext as String] = readContext
 
