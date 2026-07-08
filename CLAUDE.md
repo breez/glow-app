@@ -128,9 +128,21 @@ architecture-level pointer list a maintainer needs to navigate the code.
 
 - **Native asset pipeline** — `scripts/prepare-native-assets.mjs`
   (sharp) + `npx capacitor-assets generate` via `make assets`. Source
-  image: `glow-web/public/assets/Glow_Logo.png`. Regenerates every
+  image: `glow-web/public/assets/Glow_Logo.svg`. Regenerates every
   Android mipmap + drawable density and every iOS AppIcon / Splash
   slot. Adaptive icon background set to spark-void (`#0a0a0f`).
+  Android launch splash is three script-emitted per-density drawables,
+  not the capacitor-assets full-screen splash PNGs (those are deleted
+  by a `make assets` post-step; no launch path draws them):
+  `splash_icon` (288dp, `windowSplashScreenAnimatedIcon`, the Android
+  12+ system splash shown for `launchShowDuration`), `splash_logo`
+  (110dp, matching the PWA splash as measured on-device, inside the
+  `splash_window` layer-list window background for
+  pre-12 launches), and the same `splash_logo` as the plugin's
+  fallback drawable (`androidSplashResourceName` + `CENTER` scale in
+  `capacitor.config.ts`). Per-density output matters: a single
+  mid-density bitmap gets upscaled 1.5x/2x on xxhdpi/xxxhdpi devices
+  and renders blurry.
 - **Launch themes** — `android/app/src/main/res/values/styles.xml`
   pins the pre-JS system bar theme dark so there's no flash of
   default chrome before `main.tsx` runs the `StatusBar` plugin init.

@@ -28,14 +28,12 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <!-- Cold-launch window background. @drawable/splash_window is
              a layer-list (built by `make assets`) that fills with
-             spark-dark and centers a small splash_logo bitmap. A raw
-             @drawable/splash here would be stretched by Android to
-             fill the (typically tall portrait) window for ~50ms
-             before @capacitor/splash-screen takes over with
-             FIT_CENTER, surfacing as a vertically-stretched logo.
-             The layer-list keeps the BG uniform and respects the
-             bitmap's intrinsic size, so the cold-launch frame
-             matches the plugin-rendered splash that follows it. -->
+             spark-dark and centers the per-density splash_logo bitmap
+             at its intrinsic size. A raw full-screen bitmap here would
+             be stretched by Android to fill the (typically tall
+             portrait) window, surfacing as a vertically-stretched,
+             blurry logo. This is the whole splash on pre-12 devices;
+             on Android 12+ the system splash below covers it. -->
         <item name="android:background">@drawable/splash_window</item>
         <item name="android:statusBarColor">@color/spark_dark</item>
         <item name="android:windowLightStatusBar">false</item>
@@ -49,5 +47,14 @@
              canvas in Light mode. Theme.SplashScreen applies this on
              API 31+ and emulates it below. -->
         <item name="windowSplashScreenBackground">@color/spark_dark</item>
+        <!-- On Android 12+ the system splash icon, not the window
+             background, is what stays on screen for the plugin's
+             launchShowDuration. Left unset it falls back to the
+             launcher icon: a 108dp bitmap the system upscales ~2x
+             into its splash icon container, which renders visibly
+             blurry. splash_icon ships per density at the platform's
+             288dp spec size, so it only ever draws at or below its
+             native resolution. -->
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
     </style>
 </resources>
