@@ -1,0 +1,79 @@
+name: Glow-web Submodule Bump
+
+on:
+  schedule:
+    - cron: '30 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      # The spark-sdk-update-check app needs Contents + Pull requests
+      # read/write on this repo for the push + PR below.
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ vars.SDK_CHECK_APP_ID }}
+          private-key: ${{ secrets.SDK_CHECK_APP_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Bump submodule and SDK pin, open PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          git -C glow-web fetch origin main
+          TARGET=$(git -C glow-web rev-parse origin/main)
+          CURRENT=$(git -C glow-web rev-parse HEAD)
+          if [ "$TARGET" = "$CURRENT" ]; then
+            echo "Submodule already at glow-web main."; exit 0
+          fi
+
+          git -C glow-web checkout -q "$TARGET"
+
+          # Keep .spark-sdk-ref in step with the web SDK: a vendored dep
+          # records its source sha in vendor/SOURCE_COMMIT; an npm dep maps
+          # to the spark-sdk tag of the same version.
+          DEP=$(node -p "require('./glow-web/package.json').dependencies['@breeztech/breez-sdk-spark']")
+          if [[ "$DEP" == file:* ]]; then
+            SDK_SHA=$(cat glow-web/vendor/SOURCE_COMMIT 2>/dev/null || true)
+          else
+            VER=$(echo "$DEP" | sed 's/^[^0-9]*//')
+            SDK_SHA=$(gh api "repos/breez/spark-sdk/commits/$VER" --jq .sha 2>/dev/null || true)
+          fi
+          SDK_NOTE=""
+          if [ -n "$SDK_SHA" ] && ! grep -q "^$SDK_SHA$" .spark-sdk-ref; then
+            sed -E -i "s/^[0-9a-f]{40}$/$SDK_SHA/" .spark-sdk-ref
+            SDK_NOTE="
+
+          Also moves \`.spark-sdk-ref\` to \`$SDK_SHA\` to match the web SDK (\`$DEP\`); review the pin comment in that file, it may be stale."
+          fi
+
+          git config user.name "spark-sdk-update-check[bot]"
+          git config user.email "301314106+spark-sdk-update-check[bot]@users.noreply.github.com"
+
+          BRANCH=chore/bump-glow-web
+          git checkout -B "$BRANCH"
+          git add glow-web .spark-sdk-ref
+          git commit -m "chore: update glow-web submodule to latest main"
+          git push -f origin "$BRANCH"
+
+          OPEN=$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')
+          if [ "$OPEN" -eq 0 ]; then
+            gh pr create \
+              --title "chore: update glow-web submodule to latest main" \
+              --body "This PR updates the \`glow-web\` submodule to the latest main (\`$(git -C glow-web rev-parse --short HEAD)\`).$SDK_NOTE
+
+          Opened automatically by the daily Glow-web Submodule Bump workflow; the branch is force-pushed to the newest main until merged."
+          else
+            echo "Open PR for $BRANCH already exists; branch updated."
+          fi
