@@ -6,6 +6,6 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk 0.17.1 release (f660f5a3b). Matches the
-#   @breeztech/breez-sdk-spark ^0.17.1 dep glow-web pins at main.
-f660f5a3bf24323e5c14235efcd28e5aef06c8aa
+# Pin: spark-sdk main (f7d6407fd). Matches the vendored
+#   @breeztech/breez-sdk-spark tarball glow-web ships at main.
+f7d6407fda6c0e32a35394f3e941692ee9fa81f0
