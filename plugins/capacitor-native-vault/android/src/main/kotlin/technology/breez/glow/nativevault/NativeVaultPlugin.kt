@@ -54,6 +54,32 @@ class NativeVaultPlugin : Plugin() {
         call.resolve(result)
     }
 
+    /**
+     * Standalone biometric gate: prompts and resolves/rejects without
+     * touching the vault. Used by the JS app-lock layer (Security page
+     * gating + lock screen), where the seed stays in the device-only
+     * tier so a PIN fallback can still start the app.
+     */
+    @PluginMethod
+    fun authenticate(call: PluginCall) {
+        val hostActivity = activity as? FragmentActivity
+        if (hostActivity == null) {
+            call.reject(
+                "Plugin host activity is not a FragmentActivity",
+                NativeVaultErrorCode.UNKNOWN.code,
+            )
+            return
+        }
+        biometric.authenticate(
+            activity = hostActivity,
+            title = call.getString("reason") ?: "Unlock Glow",
+            subtitle = "",
+            cancelLabel = "Cancel",
+            onSuccess = { call.resolve() },
+            onFailure = { code, message -> call.reject(message, code.code) },
+        )
+    }
+
     // MARK: - Storage
 
     @PluginMethod
