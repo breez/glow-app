@@ -44,7 +44,9 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup guide including SDK build pr
 
 ## Phase 3: Native Secure Seed Storage
 
-Stores the wallet seed in iOS Keychain / Android Keystore with biometric binding at the OS layer (Face ID / Touch ID / BiometricPrompt). On native, this replaces the plaintext localStorage mnemonic path and the per-launch passkey PRF roundtrip with a single biometric unlock. On web the abstraction is a no-op — the existing localStorage / passkey re-derive flow runs unchanged.
+Stores the wallet seed in iOS Keychain / Android Keystore, replacing the plaintext localStorage mnemonic path and the per-launch passkey PRF roundtrip on native. On web the abstraction is a no-op — the existing localStorage / passkey re-derive flow runs unchanged.
+
+The vault has two tiers, and **biometric unlock is opt-in** (glow-web `feat/optional-biometric-unlock`, July 2026, per Roy's "no login by default" decision): by default the seed lives in a device-only tier (encrypted at rest, no auth binding) and launch connects silently, like the PWA. A Settings → Security toggle (native only) moves the seed into the biometric-bound tier (Face ID / Touch ID / BiometricPrompt at the OS layer); the occupied tier IS the setting — there is no separate flag. The startup unlock flow (UnlockingPage / UnlockPage, `native-unlocking` / `native-locked` states) keys on "biometric tier has a seed", independent of passkey vs mnemonic wallet mode. Everything below about biometric binding describes the opt-in tier.
 
 The original Phase 3 PR (#2) used the `@aparajita/capacitor-secure-storage` and `@aparajita/capacitor-biometric-auth` packages. The current state on the `feat/native-secure-storage-followups` branch replaces those with an in-house `capacitor-native-vault` plugin and adds biometric-binding at the cryptographic layer (F2 + F3 follow-ups).
 
