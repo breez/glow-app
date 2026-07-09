@@ -9,6 +9,7 @@
     "build": "npm run build:web && npm run sync",
     "open:ios": "npx cap open ios",
     "open:android": "npx cap open android",
+    "version": "sed -i '' \"s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $npm_package_version;/g\" ios/App/App.xcodeproj/project.pbxproj && git add ios/App/App.xcodeproj/project.pbxproj",
     "postinstall": "patch-package"
   },
   "dependencies": {
