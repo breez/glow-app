@@ -140,16 +140,14 @@ apply from: 'capacitor.build.gradle'
 // running publishReleaseBundle.
 play {
     track.set('internal')
-    // DRAFT until the first upload promotes the app out of Play
-    // Console's "draft" app-lifecycle state. Google rejects
-    // non-draft releases against draft apps with:
-    //   "Only releases with status draft may be created on draft app."
-    // Once the first upload lands successfully, a maintainer promotes
-    // the release via Play Console → Testing → Internal testing.
-    // That action transitions the app out of draft permanently, and
-    // from then on this can be switched to COMPLETED for push-to-
-    // tester behavior. Tracked as a follow-up.
-    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.DRAFT)
+    // COMPLETED = uploads go live on the internal track immediately
+    // (push-to-tester). The app left Play Console's "draft" lifecycle
+    // state when the first release was promoted manually; before that,
+    // this had to be DRAFT because Google rejects non-draft releases
+    // against draft apps ("Only releases with status draft may be
+    // created on draft app"). Uploads stuck as unpromoted drafts
+    // (0.1.2's first attempt) were the symptom of leaving this on DRAFT.
+    releaseStatus.set(com.github.triplet.gradle.androidpublisher.ReleaseStatus.COMPLETED)
     defaultToAppBundles.set(true)
     serviceAccountCredentials.set(
         file(System.getenv('PLAY_SERVICE_ACCOUNT_JSON_PATH') ?: 'play-service-account.json')
