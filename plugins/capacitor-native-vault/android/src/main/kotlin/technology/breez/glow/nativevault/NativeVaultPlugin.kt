@@ -50,8 +50,47 @@ class NativeVaultPlugin : Plugin() {
         val result = JSObject().apply {
             put("available", capability.available)
             put("biometryType", capability.type.value)
+            capability.unavailabilityReason?.let { put("unavailabilityReason", it) }
+            capability.unavailabilityCode?.let { put("unavailabilityCode", it.code) }
         }
         call.resolve(result)
+    }
+
+    /**
+     * iOS-only lockout recovery (`deviceOwnerAuthentication`). Android's
+     * `canAuthenticate` never reports lockout (it surfaces at prompt time
+     * and BiometricPrompt handles its own device-credential fallback), so
+     * the JS layer never calls this here; reject for bridge symmetry.
+     */
+    @PluginMethod
+    fun authenticateDeviceOwner(call: PluginCall) {
+        call.reject("Not supported on Android", NativeVaultErrorCode.BIOMETRIC_UNAVAILABLE.code)
+    }
+
+    /**
+     * Standalone biometric gate: prompts and resolves/rejects without
+     * touching the vault. Used by the JS app-lock layer (Security page
+     * gating + lock screen), where the seed stays in the device-only
+     * tier so a PIN fallback can still start the app.
+     */
+    @PluginMethod
+    fun authenticate(call: PluginCall) {
+        val hostActivity = activity as? FragmentActivity
+        if (hostActivity == null) {
+            call.reject(
+                "Plugin host activity is not a FragmentActivity",
+                NativeVaultErrorCode.UNKNOWN.code,
+            )
+            return
+        }
+        biometric.authenticate(
+            activity = hostActivity,
+            title = call.getString("reason") ?: "Unlock Glow",
+            subtitle = "",
+            cancelLabel = "Cancel",
+            onSuccess = { call.resolve() },
+            onFailure = { code, message -> call.reject(message, code.code) },
+        )
     }
 
     // MARK: - Storage

@@ -44,7 +44,9 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup guide including SDK build pr
 
 ## Phase 3: Native Secure Seed Storage
 
-Stores the wallet seed in iOS Keychain / Android Keystore with biometric binding at the OS layer (Face ID / Touch ID / BiometricPrompt). On native, this replaces the plaintext localStorage mnemonic path and the per-launch passkey PRF roundtrip with a single biometric unlock. On web the abstraction is a no-op — the existing localStorage / passkey re-derive flow runs unchanged.
+Stores the wallet seed in iOS Keychain / Android Keystore, replacing the plaintext localStorage mnemonic path and the per-launch passkey PRF roundtrip on native. On web the abstraction is a no-op — the existing localStorage / passkey re-derive flow runs unchanged.
+
+**App lock is opt-in, Misty Breez-style** (glow-web `feat/optional-biometric-unlock`, July 2026, per Roy's "no login by default" decision): the seed always lives in the vault's device-only tier (encrypted at rest, no auth binding) and launch connects silently, like the PWA. A dedicated Security page (SideMenu, native only) offers an opt-in 6-digit PIN, and on top of it an optional biometric gate plus an auto-lock timeout (glow-web `services/appLock.ts`, `hooks/useAppLock.ts`, `pages/SecurityPage.tsx`, `components/LockScreen.tsx` + the plugin's standalone `authenticate()`). PIN/biometrics gate the UI only — deliberately NOT crypto binding, because a biometric-bound seed could never be released by a PIN fallback. The biometric-bound tier and its startup unlock flow (UnlockingPage / UnlockPage, `native-unlocking` / `native-locked`) survive only as a legacy migration path: pre-app-lock installs unlock once via the OS prompt, then the seed moves to the device-only tier. The F3 sections below describe that legacy bound tier.
 
 The original Phase 3 PR (#2) used the `@aparajita/capacitor-secure-storage` and `@aparajita/capacitor-biometric-auth` packages. The current state on the `feat/native-secure-storage-followups` branch replaces those with an in-house `capacitor-native-vault` plugin and adds biometric-binding at the cryptographic layer (F2 + F3 follow-ups).
 

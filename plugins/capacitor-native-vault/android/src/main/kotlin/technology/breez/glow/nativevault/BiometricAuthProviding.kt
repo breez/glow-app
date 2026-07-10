@@ -30,6 +30,13 @@ enum class NativeVaultBiometryType(val value: String) {
 data class BiometryCapability(
     val available: Boolean,
     val type: NativeVaultBiometryType,
+    /** Why [available] is false (raw `canAuthenticate` status), null when
+     *  available. Diagnostic only — surfaced to the JS logger so "the
+     *  biometric row vanished" is explainable from Share Logs. */
+    val unavailabilityReason: String? = null,
+    /** Structured counterpart of [unavailabilityReason]: the mapped
+     *  [NativeVaultErrorCode], so JS can branch without string parsing. */
+    val unavailabilityCode: NativeVaultErrorCode? = null,
 )
 
 /**

@@ -24,6 +24,8 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "NativeVault"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "checkBiometry", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "authenticate", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "authenticateDeviceOwner", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "hasStoredSeed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "storeSeed", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "retrieveSeed", returnType: CAPPluginReturnPromise),
@@ -43,10 +45,50 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
 
     @objc func checkBiometry(_ call: CAPPluginCall) {
         let capability = biometric.checkCapability()
-        call.resolve([
+        var result: [String: Any] = [
             "available": capability.available,
             "biometryType": capability.type.rawValue,
-        ])
+        ]
+        if let reason = capability.unavailabilityReason {
+            result["unavailabilityReason"] = reason
+        }
+        if let code = capability.unavailabilityCode {
+            result["unavailabilityCode"] = code.rawValue
+        }
+        call.resolve(result)
+    }
+
+    /// Biometrics-OR-passcode prompt (`deviceOwnerAuthentication`).
+    /// Succeeding via passcode clears a biometry lockout — the JS layer
+    /// offers this when `checkBiometry` reports BIOMETRIC_LOCKOUT.
+    @objc func authenticateDeviceOwner(_ call: CAPPluginCall) {
+        let reason = call.getString("reason") ?? "Unlock Glow"
+        biometric.authenticateDeviceOwner(
+            reason: reason,
+            onSuccess: {
+                DispatchQueue.main.async { call.resolve() }
+            },
+            onFailure: { code, message in
+                DispatchQueue.main.async { call.reject(message, code.rawValue) }
+            }
+        )
+    }
+
+    /// Standalone biometric gate: prompts and resolves/rejects without
+    /// touching the vault. Used by the JS app-lock layer (Security page
+    /// gating + lock screen), where the seed itself stays in the
+    /// device-only tier so a PIN fallback can still start the app.
+    @objc func authenticate(_ call: CAPPluginCall) {
+        let reason = call.getString("reason") ?? "Unlock Glow"
+        biometric.authenticate(
+            reason: reason,
+            onSuccess: {
+                DispatchQueue.main.async { call.resolve() }
+            },
+            onFailure: { code, message in
+                DispatchQueue.main.async { call.reject(message, code.rawValue) }
+            }
+        )
     }
 
     // MARK: - Storage

@@ -21,7 +21,21 @@ final class LocalAuthBiometricAuth: BiometricAuthProviding {
         )
 
         guard canEvaluate else {
-            return BiometryCapability(available: false, type: .none)
+            // Keep the raw LAError visible: lockout (-8), not enrolled
+            // (-7), permission denied / not available (-6) all collapse
+            // to `available: false` otherwise, and the Security page
+            // hides the biometric row with no way to tell why.
+            let code = mapLAError(error)
+            let reason = "canEvaluatePolicy=false code=\(error?.code ?? 0) "
+                + "(\(code.rawValue)): "
+                + (error?.localizedDescription ?? "no error description")
+            NSLog("NativeVault checkBiometry unavailable: %@", reason)
+            return BiometryCapability(
+                available: false,
+                type: .none,
+                unavailabilityReason: reason,
+                unavailabilityCode: code
+            )
         }
 
         let type: NativeVaultBiometryType
@@ -69,6 +83,40 @@ final class LocalAuthBiometricAuth: BiometricAuthProviding {
             }
             let code = mapLAError(error)
             let message = error?.localizedDescription ?? "Biometric authentication failed"
+            onFailure(code, message)
+        }
+    }
+
+    func authenticateDeviceOwner(
+        reason: String,
+        onSuccess: @escaping () -> Void,
+        onFailure: @escaping (NativeVaultErrorCode, String) -> Void
+    ) {
+        let context = LAContext()
+
+        // No biometrics-availability pre-flight here, on purpose: this
+        // policy is exactly for the states where biometrics can't run
+        // (lockout). `deviceOwnerAuthentication` falls back to the
+        // device passcode, and succeeding via passcode clears the
+        // biometry lockout system-wide.
+        var policyError: NSError?
+        if !context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &policyError) {
+            // Only fails without a device passcode set at all.
+            let code = mapLAError(policyError)
+            onFailure(code, policyError?.localizedDescription ?? "Device authentication unavailable")
+            return
+        }
+
+        context.evaluatePolicy(
+            .deviceOwnerAuthentication,
+            localizedReason: reason
+        ) { success, error in
+            if success {
+                onSuccess()
+                return
+            }
+            let code = mapLAError(error)
+            let message = error?.localizedDescription ?? "Device authentication failed"
             onFailure(code, message)
         }
     }

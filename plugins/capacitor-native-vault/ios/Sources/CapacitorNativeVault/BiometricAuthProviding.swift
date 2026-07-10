@@ -26,6 +26,14 @@ enum NativeVaultBiometryType: String {
 struct BiometryCapability {
     let available: Bool
     let type: NativeVaultBiometryType
+    /// Why `available` is false (raw platform error code + description),
+    /// nil when available. Diagnostic only — surfaced to the JS logger so
+    /// "the Face ID row vanished" is explainable from Share Logs.
+    var unavailabilityReason: String? = nil
+    /// Structured counterpart of `unavailabilityReason`: the mapped
+    /// `NativeVaultErrorCode`, so JS can branch (e.g. offer passcode
+    /// recovery on BIOMETRIC_LOCKOUT) without string parsing.
+    var unavailabilityCode: NativeVaultErrorCode? = nil
 }
 
 /// Internal trait/protocol for biometric authentication. The plugin class
@@ -40,6 +48,15 @@ protocol BiometricAuthProviding {
     /// Prompt the user for biometric authentication. Calls `onSuccess` on
     /// pass, `onFailure(code)` on cancel/error.
     func authenticate(
+        reason: String,
+        onSuccess: @escaping () -> Void,
+        onFailure: @escaping (NativeVaultErrorCode, String) -> Void
+    )
+
+    /// Prompt with the biometrics-OR-passcode policy
+    /// (`deviceOwnerAuthentication`). Succeeding via passcode clears a
+    /// biometry lockout — the recovery path for BIOMETRIC_LOCKOUT.
+    func authenticateDeviceOwner(
         reason: String,
         onSuccess: @escaping () -> Void,
         onFailure: @escaping (NativeVaultErrorCode, String) -> Void

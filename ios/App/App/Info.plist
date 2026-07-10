@@ -47,6 +47,15 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<!-- Glow's UI is dark-only (CSS), but without this key the UIKit
+	     environment follows the device appearance. On a light-mode
+	     device, system overlay windows (the Face ID prompt, alerts)
+	     then drive the status bar to light-appearance dark icons,
+	     invisible over the dark WebView. Pinning the native style
+	     dark keeps status icons light and renders system chrome
+	     (Face ID dialog, share sheet, keyboard) dark to match. -->
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Authenticate with Face ID to access your wallet via passkey</string>
 	<key>NSCameraUsageDescription</key>
