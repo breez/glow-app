@@ -33,7 +33,29 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
         val canAuth = manager.canAuthenticate(BIOMETRIC_AUTHENTICATORS)
 
         if (canAuth != BiometricManager.BIOMETRIC_SUCCESS) {
-            return BiometryCapability(available = false, type = NativeVaultBiometryType.NONE)
+            // Keep the raw status visible: lockout, none-enrolled, and
+            // hw-unavailable all collapse to `available: false`
+            // otherwise, and the Security page hides the biometric row
+            // with no way to tell why.
+            val statusName = when (canAuth) {
+                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "NO_HARDWARE"
+                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> "HW_UNAVAILABLE"
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "NONE_ENROLLED"
+                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED -> "SECURITY_UPDATE_REQUIRED"
+                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> "UNSUPPORTED"
+                BiometricManager.BIOMETRIC_STATUS_UNKNOWN -> "STATUS_UNKNOWN"
+                else -> "UNRECOGNIZED"
+            }
+            val code = when (canAuth) {
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> NativeVaultErrorCode.BIOMETRIC_NOT_ENROLLED
+                else -> NativeVaultErrorCode.BIOMETRIC_UNAVAILABLE
+            }
+            return BiometryCapability(
+                available = false,
+                type = NativeVaultBiometryType.NONE,
+                unavailabilityReason = "canAuthenticate=$canAuth ($statusName)",
+                unavailabilityCode = code,
+            )
         }
 
         // androidx.biometric does not surface which underlying biometric

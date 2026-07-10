@@ -50,8 +50,21 @@ class NativeVaultPlugin : Plugin() {
         val result = JSObject().apply {
             put("available", capability.available)
             put("biometryType", capability.type.value)
+            capability.unavailabilityReason?.let { put("unavailabilityReason", it) }
+            capability.unavailabilityCode?.let { put("unavailabilityCode", it.code) }
         }
         call.resolve(result)
+    }
+
+    /**
+     * iOS-only lockout recovery (`deviceOwnerAuthentication`). Android's
+     * `canAuthenticate` never reports lockout (it surfaces at prompt time
+     * and BiometricPrompt handles its own device-credential fallback), so
+     * the JS layer never calls this here; reject for bridge symmetry.
+     */
+    @PluginMethod
+    fun authenticateDeviceOwner(call: PluginCall) {
+        call.reject("Not supported on Android", NativeVaultErrorCode.BIOMETRIC_UNAVAILABLE.code)
     }
 
     /**
