@@ -66,6 +66,16 @@ on:
         description: 'Build + sign but skip the upload step (only meaningful when distribution=store)'
         type: boolean
         default: false
+      ios_enable_buy:
+        # Buy Bitcoin is on by default in every build; store builds
+        # (ios-release) pass VITE_IOS_DISABLE_BUY=true for App Store
+        # compliance (Guideline 3.1.5(iii)). This toggle skips that
+        # kill flag for TestFlight open-beta builds. NEVER submit a
+        # flagged build to App Store review — release-* tag builds
+        # always disable Buy.
+        description: 'Keep the Buy Bitcoin button in an iOS store build (TestFlight beta only — never for App Store review)'
+        type: boolean
+        default: false
       notes:
         # Multiline string for custom release notes on Firebase App
         # Distribution uploads. When empty, the preview jobs fall back
@@ -871,6 +881,11 @@ jobs:
       - name: Build glow-web dist/
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+          # App Store submissions must never show Buy Bitcoin
+          # (Guideline 3.1.5(iii)) — always disabled on release-* tags.
+          # The ios_enable_buy dispatch input keeps it for
+          # TestFlight-only beta builds.
+          VITE_IOS_DISABLE_BUY: ${{ inputs.ios_enable_buy && 'false' || 'true' }}
         run: make web
 
       - name: Install glow-app deps
