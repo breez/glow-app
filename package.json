@@ -31,7 +31,7 @@
     "@capacitor/share": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
-    "@capgo/capacitor-navigation-bar": "^8.2.5",
+    "@capgo/capacitor-navigation-bar": "^8.2.6",
     "capacitor-native-vault": "file:plugins/capacitor-native-vault",
     "capacitor-passkey-prf": "file:plugins/capacitor-passkey-prf"
   },
