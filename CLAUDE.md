@@ -602,10 +602,14 @@ maintainer pointer list.
 - `ios/App/App/PrivacyInfo.xcprivacy` declares
   `NSPrivacyAccessedAPICategoryFileTimestamp` (C617.1) +
   `NSPrivacyAccessedAPICategoryDiskSpace` (E174.1) for
-  `@capacitor/filesystem` (the in-app log-share flow).
-  Capacitor 8 ships its own framework-level manifest; the
-  app-level file aggregates with it. We do NOT use
-  `@capacitor/preferences` so `CA92.1` is not declared.
+  `@capacitor/filesystem` (the in-app log-share flow), and
+  `NSPrivacyAccessedAPICategoryUserDefaults` (CA92.1) for
+  `@capacitor/preferences`. Capacitor 8 ships its own
+  framework-level manifest; the app-level file aggregates with
+  it. `@capacitor/preferences` ships NO manifest of its own, so
+  the CA92.1 entry is load-bearing — it's the only thing
+  declaring UserDefaults, and glow-web reaches for Preferences
+  from `secureStorage.ts`, `appLock.ts`, and `settings.ts`.
   Keychain `SecItem*` and `ASAuthorization` are NOT in
   Apple's required-reason list, so the in-house
   `capacitor-native-vault` + `capacitor-passkey-prf` plugins
