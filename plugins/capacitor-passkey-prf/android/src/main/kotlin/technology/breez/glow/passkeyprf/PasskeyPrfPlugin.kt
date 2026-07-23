@@ -142,6 +142,9 @@ class PasskeyPlugin : Plugin() {
                 recordCredential(response.credential)
                 call.resolve(JSObject().apply {
                     put("wallet", encodeWallet(response.wallet))
+                    // Discovery labels for the returning multi-wallet case;
+                    // empty on the register path (glow-web#309).
+                    put("labels", JSArray(response.labels))
                     put("registeredCredential", response.credential?.let { encodeCredential(it) })
                 })
             } catch (e: Exception) {

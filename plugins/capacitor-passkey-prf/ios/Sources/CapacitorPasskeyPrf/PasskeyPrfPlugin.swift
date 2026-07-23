@@ -132,6 +132,9 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
                 await self.recordCredential(response.credential)
                 var out: [String: Any] = [
                     "wallet": Self.encodeWallet(response.wallet),
+                    // Discovery labels for the returning multi-wallet case;
+                    // empty on the register path (glow-web#309).
+                    "labels": response.labels,
                 ]
                 if let cred = response.credential {
                     out["registeredCredential"] = Self.encodeCredential(cred)
