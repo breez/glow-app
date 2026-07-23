@@ -180,18 +180,37 @@ shipped in `@capacitor/keyboard` 8.0.5 (the released source is
 byte-identical to what the patch produced). `@capacitor/keyboard` now
 floats normally and is no longer in the dependabot ignore list.
 
-- **`patches/@capacitor+android+8.3.0.patch`** — patches
-  `com.getcapacitor.plugin.SystemBars`'s inset listener to stop
-  applying `imeInsets.bottom` as padding on the WebView parent.
-  Android's `windowSoftInputMode="adjustResize"` already shrinks the
-  activity content frame to exclude the keyboard; applying IME
-  insets AGAIN as padding double-subtracts the keyboard height,
-  leaving the WebView roughly one-keyboard-height shorter than the
-  visible content area. Diagnosed via `adb shell uiautomator dump`:
-  the parent `ViewGroup` was correctly sized (1080×1356) but the
-  `WebView` child was shrunk to 1080×553 = parent − 803 ≈
-  imeInsets.bottom. See the Ionic forum thread at
-  /251049/4 (vosecek) for the root-cause analysis.
+- **`patches/@capacitor+android+8.3.0.patch`** — makes
+  `com.getcapacitor.plugin.SystemBars`'s IME padding on the WebView
+  parent conditional on the Android version, because who resizes the
+  window when the keyboard opens differs by OS version:
+  - **Android 14 and below**: the framework honors
+    `windowSoftInputMode="adjustResize"` and shrinks the activity
+    content frame itself. Upstream's unconditional `imeInsets.bottom`
+    padding double-subtracts the keyboard height there, leaving the
+    WebView one keyboard shorter than the visible area. Diagnosed via
+    `adb shell uiautomator dump`: parent `ViewGroup` correctly sized
+    (1080×1356) but the `WebView` child shrunk to 1080×553 = parent
+    − 803 ≈ imeInsets.bottom (Ionic forum /251049/4, vosecek). The
+    patch skips IME padding on these versions.
+  - **Android 15+**: enforced edge-to-edge (targetSdk 35+) makes the
+    framework IGNORE `adjustResize` (`SOFT_INPUT_ADJUST_RESIZE` is
+    documented as ignored for windows not fitting system windows), so
+    the SystemBars IME padding is the ONLY thing that resizes the
+    WebView above the keyboard. The patch keeps upstream's padding
+    here, and additionally zeroes the IME inset dispatched into the
+    WebView so Chromium (WebView 140+ consumes insets) can't ALSO
+    shrink/pan its visual viewport. An earlier patch revision removed
+    the padding on all versions; on Android 15+ that left the keyboard
+    overlaying the WebView, Chromium panned its visual viewport to
+    reveal the focused field, and bottom sheets ended up over-scrolled
+    with a keyboard-sized dead gap (breez/glow-web#308). Verified by
+    A/B on an API 36 emulator: with IME shown, old patch → WebView
+    stays 1080×2424; fixed patch → WebView resizes to 1080×2193
+    (exactly the IME top).
+  - Also asks for a fresh inset dispatch on window-focus gain so the
+    launch-time `--safe-area-inset-*` CSS injection self-corrects
+    after the app-open transition.
 
 ### Android hardware back button
 
