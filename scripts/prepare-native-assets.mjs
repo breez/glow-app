@@ -64,12 +64,22 @@ const SPLASH_LOGO_DP = 110;
 // launcher icon, a 108dp bitmap it upscales roughly 2x into the splash
 // icon container: that upscale is the launch-splash blur on modern
 // devices. Platform spec for an icon with no icon background: 288dp
-// canvas, content fitting a 192dp circle. The system masks the icon
-// view to a circle 2/3 of its size, the same geometry as the round
-// launcher mask measured for FOREGROUND_LOGO_FRACTION below, so the
-// same 0.58 ray-tip ceiling applies.
+// canvas, content fitting a 192dp circle (the system masks the icon
+// view to a circle 2/3 of its size).
+//
+// The fraction is sized for the handoff, not the mask: the system
+// splash fades into glow-web's index.html boot splash, whose logo is
+// 33.6vw wide (121dp to 138dp on common 360dp to 412dp phones). The
+// old 0.58 mask-fit ceiling drew the logo ~152dp wide, so the handoff
+// visibly shrank it by ~25% on cold launch (issue #122). The mark is
+// taller than wide, so fit-contain in the 0.45 box (130dp) draws it
+// ~118dp wide: a near-exact width match on 360dp devices, and at
+// most ~15% under the web splash on wider phones, where the 200ms
+// crossfade reads as the logo settling in rather than deflating.
+// Keep the error on this side: native-larger-than-web reproduces the
+// reported shrink.
 const SPLASH_ICON_DP = 288;
-const SPLASH_ICON_LOGO_FRACTION = 0.58;
+const SPLASH_ICON_LOGO_FRACTION = 0.45;
 
 // Density buckets for android/res drawable-<bucket>/ outputs.
 const ANDROID_DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };

@@ -86,7 +86,7 @@ const config: CapacitorConfig = {
       // and it falls back to its own ImageView overlay (on Android 12+
       // the launch splash is the system one: windowSplashScreenBackground
       // + windowSplashScreenAnimatedIcon from styles.xml). splash_logo
-      // is the per-density 210dp mark from `make assets`; CENTER draws
+      // is the per-density 110dp mark from `make assets`; CENTER draws
       // it at intrinsic size on the backgroundColor above, with no
       // scaling at any screen size. The former full-screen `splash`
       // PNGs topped out at 1280x1920, so FIT_CENTER upscaled them
