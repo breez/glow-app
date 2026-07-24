@@ -58,9 +58,13 @@ updates:
       # Patched via patches/@capacitor+android+8.3.0.patch. Bumping
       # would silently reintroduce the IME double-subtraction grey-gap
       # until the patch is re-authored against the refactored
-      # SystemBars.java. The keyboard fix (#30/#60) landed upstream in
-      # @capacitor/keyboard 8.0.5, so that patch + ignore are gone.
+      # SystemBars.java.
       - dependency-name: "@capacitor/android"
+      # Patched via patches/@capacitor+keyboard+8.0.5.patch (one-line
+      # dispatch-mode change that lets the SystemBars patch see IME
+      # animation callbacks). Bumping without re-authoring the patch
+      # silently breaks the Android 15+ keyboard-synced resize (#126).
+      - dependency-name: "@capacitor/keyboard"
       # Pin the Capacitor stack at 8.3.0. Bumping any @capacitor/*
       # package above 8.3.0 requires a coordinated upgrade of all
       # four core packages (core, cli, ios, android) together —
