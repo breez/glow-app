@@ -75,11 +75,15 @@
         <!-- On Android 12+ the system splash icon, not the window
              background, is what stays on screen for the plugin's
              launchShowDuration. Left unset it falls back to the
-             launcher icon: a 108dp bitmap the system upscales ~2x
-             into its splash icon container, which renders visibly
-             blurry. splash_icon ships per density at the platform's
-             288dp spec size, so it only ever draws at or below its
-             native resolution. -->
+             launcher icon, which is a different mark from the one the
+             WebView paints next. splash_icon ships per density at the
+             platform's 288dp spec size, drawing the mark in the same
+             144dp box every other launch surface uses (MARK_BOX_DP in
+             scripts/prepare-native-assets.mjs).
+
+             The system rasterises any non-Animatable drawable at 108dp
+             and upscales it ~1.78x, so this draws soft at every
+             density; only an AnimatedVectorDrawable avoids that. -->
         <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
     </style>
 </resources>
