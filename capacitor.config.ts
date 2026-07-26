@@ -43,6 +43,19 @@ const config: CapacitorConfig = {
   // the native side of the bridge entirely so this config choice is no
   // longer load-bearing.
   loggingBehavior: 'none',
+  // WebView background. Capacitor only calls webView.setBackgroundColor()
+  // when this key is present (Bridge.initWebView reads
+  // `android.backgroundColor` then falls back to `backgroundColor`, and
+  // skips the call entirely when both are null), so leaving it unset
+  // leaves the WebView on Chromium's opaque WHITE default. Any region or
+  // moment the page canvas does not cover then paints white: the gap
+  // between the native splash tearing down and the first web paint, and
+  // any layout inset that leaves part of the WebView unpainted.
+  //
+  // spark-dark (#0f0f18) matches the launch splash canvas, the pre-JS
+  // AppTheme.NoActionBar windowBackground, and HomePage's own background,
+  // so the whole cold-start hand-off stays one flat color.
+  backgroundColor: '#0f0f18',
   server: {
     // HTTPS scheme required for SharedArrayBuffer support in Android WebView
     androidScheme: 'https',

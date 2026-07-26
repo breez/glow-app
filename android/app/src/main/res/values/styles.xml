@@ -13,6 +13,31 @@
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <!-- The window background, NOT the `android:background` above.
+             `android:background` is a View attribute the window never
+             reads; it is a Capacitor template default and setting it to
+             @null does nothing here. `android:windowBackground` is what
+             the DecorView actually paints, and Capacitor's SystemBars
+             plugin explicitly pushes it onto the DecorView:
+
+               decorView.setBackgroundColor(
+                   getThemeColor(context, android.R.attr.windowBackground))
+
+             Left unset it inherits from Theme.AppCompat.DayNight, which
+             resolves to background_material_light (#FAFAFA) whenever the
+             DEVICE is in light theme — and there is no values-night/ here
+             to steer it. Glow is dark-only (index.html declares
+             `color-scheme: dark`), so the app looks identical in both
+             system themes and this was the only thing that varied: any
+             region the WebView does not cover painted near-white on a
+             light-mode device and near-black on a dark-mode one. That is
+             why the Android 13 status-bar gap reproduced as a *white* bar
+             for one tester and went unnoticed by everyone else.
+
+             Pinning it to the canvas color makes every uncovered region
+             (inset gaps, the splash-to-first-paint window) blend into the
+             app instead of flashing white. -->
+        <item name="android:windowBackground">@color/spark_dark</item>
         <!-- Match HomePage's spark-dark (#0f0f18) canvas with
              light-on-dark system bar icons so there is no flash of
              default system chrome while the JS StatusBar plugin is still
