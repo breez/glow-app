@@ -170,15 +170,10 @@ All configured and wired via `capacitor.config.ts` (with `loggingBehavior: 'none
 
 ### Critical patches (`patch-package`, `postinstall`)
 
-One node_modules patch that re-applies on every `npm install`.
-
-The former `patches/@capacitor+keyboard+8.0.3.patch` was dropped once
-its upstream fix
-([ionic-team/capacitor-keyboard#30](https://github.com/ionic-team/capacitor-keyboard/issues/30)
-/ [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60))
-shipped in `@capacitor/keyboard` 8.0.5 (the released source is
-byte-identical to what the patch produced). `@capacitor/keyboard` now
-floats normally and is no longer in the dependabot ignore list.
+Two node_modules patches that re-apply on every `npm install`. They
+work as a pair: the keyboard patch only exists so the android patch's
+animation callback can fire. Bump either package only when re-authoring
+both patches together (both are in the dependabot ignore list).
 
 - **`patches/@capacitor+android+8.3.0.patch`** — makes
   `com.getcapacitor.plugin.SystemBars`'s IME padding on the WebView
@@ -204,13 +199,42 @@ floats normally and is no longer in the dependabot ignore list.
     the padding on all versions; on Android 15+ that left the keyboard
     overlaying the WebView, Chromium panned its visual viewport to
     reveal the focused field, and bottom sheets ended up over-scrolled
-    with a keyboard-sized dead gap (breez/glow-web#308). Verified by
-    A/B on an API 36 emulator: with IME shown, old patch → WebView
-    stays 1080×2424; fixed patch → WebView resizes to 1080×2193
-    (exactly the IME top).
+    with a keyboard-sized dead gap (breez/glow-web#308).
+  - **Show-animation deferral (#126)**: the padding waits out a
+    running IME show animation (`imeAnimationInFlight`, tracked by a
+    `WindowInsetsAnimationCompat.Callback` on the WebView parent) and
+    lands at `onEnd` via `requestApplyInsets`. Applying it at the
+    static inset dispatch resized the WebView a full keyboard height
+    at the animation's START, which cut off the bottom of bottom
+    sheets behind an empty band while the keyboard was still sliding
+    in. Deferred, the strip the WebView gives up is already covered
+    by the keyboard, so the resize is invisible and glow-web's sheet
+    tween (running from `keyboardWillShow`) is the only visible
+    motion, mirroring iOS's deferred `setFrame`. Hide is untouched:
+    insets already report the IME gone at the hide animation's start,
+    so the padding comes off immediately and the revealed strip stays
+    behind the departing keyboard. If the IME appears with no
+    animation (window focus regain, animations disabled), no
+    `onPrepare` fires and the padding applies instantly as before.
+    The IME inset is zeroed into the WebView whenever we own IME
+    handling (Android 15+), including mid-animation, so Chromium
+    never self-shrinks or pans.
   - Also asks for a fresh inset dispatch on window-focus gain so the
     launch-time `--safe-area-inset-*` CSS injection self-corrects
     after the app-open transition.
+
+- **`patches/@capacitor+keyboard+8.0.5.patch`** — one-line change:
+  the decor-level `WindowInsetsAnimationCompat.Callback` (which fires
+  the plugin's `keyboardWillShow`/`keyboardDidShow` JS events) uses
+  `DISPATCH_MODE_CONTINUE_ON_SUBTREE` instead of `DISPATCH_MODE_STOP`,
+  so the animation dispatch reaches the WebView parent where the
+  SystemBars patch listens. SystemBars' own callback uses
+  `DISPATCH_MODE_STOP`, so the WebView itself still receives no
+  animation dispatches (Chromium behavior unchanged). The former
+  8.0.3-era keyboard patch (upstream
+  [#30](https://github.com/ionic-team/capacitor-keyboard/issues/30) /
+  [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60))
+  shipped upstream in 8.0.5 and is unrelated to this one.
 
 ### Android hardware back button
 

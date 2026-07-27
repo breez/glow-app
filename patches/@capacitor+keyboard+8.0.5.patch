@@ -1,0 +1,18 @@
+diff --git a/node_modules/@capacitor/keyboard/android/src/main/java/com/capacitorjs/plugins/keyboard/Keyboard.java b/node_modules/@capacitor/keyboard/android/src/main/java/com/capacitorjs/plugins/keyboard/Keyboard.java
+index a31085c..96333b6 100644
+--- a/node_modules/@capacitor/keyboard/android/src/main/java/com/capacitorjs/plugins/keyboard/Keyboard.java
++++ b/node_modules/@capacitor/keyboard/android/src/main/java/com/capacitorjs/plugins/keyboard/Keyboard.java
+@@ -75,7 +75,12 @@ public class Keyboard {
+ 
+         ViewCompat.setWindowInsetsAnimationCallback(
+             rootView,
+-            new WindowInsetsAnimationCompat.Callback(WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_STOP) {
++            // PATCH (glow-app): CONTINUE_ON_SUBTREE instead of STOP so the
++            // WindowInsetsAnimation dispatch reaches the WebView parent,
++            // where the patched com.getcapacitor.plugin.SystemBars defers
++            // its IME padding to the show animation's end. SystemBars'
++            // own callback re-stops the dispatch above the WebView.
++            new WindowInsetsAnimationCompat.Callback(WindowInsetsAnimationCompat.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                 @NonNull
+                 @Override
+                 public WindowInsetsCompat onProgress(
