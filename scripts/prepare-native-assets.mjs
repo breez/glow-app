@@ -14,11 +14,13 @@
  *                                    safe-zone size, transparent)
  *   - resources/splash.png         (2732x2732, logo centered on
  *                                    #0f0f18 canvas, opaque)
- *   - resources/splash_logo-<density>.png (210dp cold-launch logo,
+ *   - resources/splash_logo-<density>.png (144dp cold-launch logo,
  *                                    mdpi..xxxhdpi, transparent)
  *   - resources/splash_icon-<density>.png (288dp Android 12+ system
  *                                    splash icon, mdpi..xxxhdpi,
  *                                    transparent)
+ *   - resources/splash_mark@<scale>x.png (144pt iOS launch mark,
+ *                                    1x..3x, transparent)
  *
  * After running this script, run:
  *   npx capacitor-assets generate \
@@ -51,35 +53,52 @@ const SPLASH_CANVAS_COLOR = { r: 15, g: 15, b: 24, alpha: 1 }; // #0f0f18 (spark
 // Target canvas sizes
 const ICON_SIZE = 1024;
 const SPLASH_SIZE = 2732;
-// Android cold-launch splash logo logical size in dp, emitted once per
-// density bucket. A single mid-density asset is not enough: Android
-// upscales it 1.5x/2x on xxhdpi/xxxhdpi devices, which reads as a
-// soft, blurry logo. 110dp matches the PWA splash logo as measured
-// on-device (Chrome renders the manifest icon at ~110dp visible),
-// keeping the native cold launch visually consistent with the PWA.
-const SPLASH_LOGO_DP = 110;
+// The one size the mark is drawn at anywhere on the launch path, as a
+// square box the mark is fit-contained into (so it renders 130.9 wide
+// by 144 tall). Android reads it as dp, iOS as pt, glow-web as CSS px:
+// index.html's .splash-logo and the w-36 launch screens use the same
+// box, so nothing resizes as the launch hands off from the system
+// splash to the WebView to the first React screen.
+//
+// It must be absolute, not a fraction of screen width. The Android 12+
+// splash icon is specced in dp and does not scale with the screen, so
+// a viewport-relative counterpart can only agree with it at a single
+// screen width. Sizing the native asset to chase a 33.6vw web logo is
+// what left issue #122 open: it matched at ~351dp and diverged by up
+// to 37% on wider phones.
+//
+// Ceiling is 166dp. The system masks the splash icon to config_icon_mask
+// inscribed in the 192dp icon view, and the mark's ray tips reach
+// 0.5758 of its box side, so 96/0.5758 = 166.7dp before a tip clips.
+// (The same measurement reproduces the 0.58 launcher ceiling below.)
+const MARK_BOX_DP = 144;
+
+// Android cold-launch splash logo, emitted once per density bucket. A
+// single mid-density asset is not enough: Android upscales it 1.5x/2x
+// on xxhdpi/xxxhdpi devices, which reads as a soft, blurry logo.
+// Feeds the Capacitor plugin's ImageView fallback, which is only
+// reached if the Android 12 splash path throws.
+const SPLASH_LOGO_DP = MARK_BOX_DP;
 
 // Android 12+ system splash icon (windowSplashScreenAnimatedIcon in
-// styles.xml). Without an explicit icon the system falls back to the
-// launcher icon, a 108dp bitmap it upscales roughly 2x into the splash
-// icon container: that upscale is the launch-splash blur on modern
-// devices. Platform spec for an icon with no icon background: 288dp
-// canvas, content fitting a 192dp circle (the system masks the icon
-// view to a circle 2/3 of its size).
+// styles.xml), and via core-splashscreen's compat drawable the whole
+// splash on Android 11 and below. Without an explicit icon the system
+// falls back to the launcher icon. Platform spec for an icon with no
+// icon background: the drawable is painted across a 288dp box centred
+// on a 192dp icon view, and masked to that view.
 //
-// The fraction is sized for the handoff, not the mask: the system
-// splash fades into glow-web's index.html boot splash, whose logo is
-// 33.6vw wide (121dp to 138dp on common 360dp to 412dp phones). The
-// old 0.58 mask-fit ceiling drew the logo ~152dp wide, so the handoff
-// visibly shrank it by ~25% on cold launch (issue #122). The mark is
-// taller than wide, so fit-contain in the 0.45 box (130dp) draws it
-// ~118dp wide: a near-exact width match on 360dp devices, and at
-// most ~15% under the web splash on wider phones, where the 200ms
-// crossfade reads as the logo settling in rather than deflating.
-// Keep the error on this side: native-larger-than-web reproduces the
-// reported shrink.
+// Note the system rasterises any non-Animatable drawable at 108dp and
+// upscales it ~1.78x, so this renders soft no matter what density it
+// ships at. Only an AnimatedVectorDrawable escapes that path.
 const SPLASH_ICON_DP = 288;
-const SPLASH_ICON_LOGO_FRACTION = 0.45;
+const SPLASH_ICON_LOGO_FRACTION = MARK_BOX_DP / SPLASH_ICON_DP;
+
+// iOS launch image, emitted at 1x/2x/3x. The mark alone on a
+// transparent canvas: LaunchScreen.storyboard centres it at a fixed
+// MARK_BOX_DP and paints the canvas colour itself. A full-screen
+// image would be aspect-fit to the screen and so scale with device
+// width, which is the iOS form of the same bug.
+const IOS_SCALES = [1, 2, 3];
 
 // Density buckets for android/res drawable-<bucket>/ outputs.
 const ANDROID_DENSITIES = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
@@ -100,11 +119,10 @@ const ICON_LOGO_FRACTION = 0.75;       // Full app icon: logo fills ~75% of the 
 // ceiling; re-run the circular-mask preview from issue #88 before
 // raising it.
 const FOREGROUND_LOGO_FRACTION = 0.58; // Adaptive icon foreground
-// Match HomePage's <GlowLogo sizePx={144}> on-screen size (~37% of a
-// 393-wide phone). This requires androidScaleType=FIT_CENTER (set in
-// capacitor.config.ts) so the splash drawable doesn't get stretched
-// to fill the screen, which would otherwise nearly double the
-// on-screen logo size on Android relative to iOS / HomePage.
+// Full-screen splash canvas. Only feeds capacitor-assets, which
+// requires a splash input; the launch surfaces it generates are all
+// overwritten by the `make assets` post-step with the fixed-size
+// MARK_BOX_DP assets above.
 const SPLASH_LOGO_FRACTION = 0.37;
 
 const TRANSPARENT = { r: 0, g: 0, b: 0, alpha: 0 };
@@ -215,6 +233,20 @@ async function main() {
       outputPath: join(OUTPUT_DIR, `splash_icon-${bucket}.png`),
     });
     console.log(`  ✓ splash_icon-${bucket}.png (${size}x${size}, ${SPLASH_ICON_DP}dp, logo ${Math.round(SPLASH_ICON_LOGO_FRACTION * 100)}%, transparent)`);
+  }
+
+  // splash_mark@<scale>x.png: the iOS launch image. capacitor-assets
+  // regenerates Splash.imageset from splash.png above, so the `make
+  // assets` post-step copies these over its three renditions.
+  for (const scale of IOS_SCALES) {
+    const size = MARK_BOX_DP * scale;
+    await createCenteredLogo({
+      canvasSize: size,
+      logoFraction: 1.0,
+      background: TRANSPARENT,
+      outputPath: join(OUTPUT_DIR, `splash_mark@${scale}x.png`),
+    });
+    console.log(`  ✓ splash_mark@${scale}x.png (${size}x${size}, ${MARK_BOX_DP}pt, transparent)`);
   }
 
   console.log('\nDone. Next:');

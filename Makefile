@@ -163,6 +163,15 @@ assets: ## Regenerate native app icons and splash from glow-web/public/assets/Gl
 		android/app/src/main/res/drawable-port-*/splash.png
 	@rmdir android/app/src/main/res/drawable-land-* \
 		android/app/src/main/res/drawable-port-* 2>/dev/null || true
+	@# iOS launch image: replace the full-screen splash capacitor-assets
+	@# generates with the mark alone at a fixed 144pt.
+	@# LaunchScreen.storyboard centers it and paints the canvas itself,
+	@# so the mark stays the same size on every device instead of
+	@# scaling with screen width (issue #122).
+	@for s in 1 2 3; do \
+		cp "resources/splash_mark@$${s}x.png" \
+			"ios/App/App/Assets.xcassets/Splash.imageset/Default@$${s}x~universal~anyany.png"; \
+	done
 
 strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework Info.plist
 	@# spark-sdk's xcframework Info.plist declares `DebugSymbolsPath=dSYMs`
