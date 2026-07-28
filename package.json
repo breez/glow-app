@@ -1,6 +1,6 @@
 {
   "name": "glow-app",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Native iOS/Android wrapper for [Glow](https://github.com/breez/glow-web) — a Bitcoin/Lightning wallet powered by the Breez Spark SDK.",
   "private": true,
   "scripts": {
