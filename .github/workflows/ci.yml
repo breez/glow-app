@@ -719,7 +719,7 @@ jobs:
           if-no-files-found: ignore
 
   android-release:
-    name: Android release (Play Internal)
+    name: Android release (Play testing tracks)
     runs-on: ubuntu-latest
     needs: [warm-sdk-linux]
     timeout-minutes: 45
@@ -796,8 +796,13 @@ jobs:
           else
             SHORT_NOTES="$FULL_NOTES"
           fi
-          printf '%s\n' "$SHORT_NOTES" > android/app/src/main/play/release-notes/en-US/internal.txt
-          echo "=== Play internal.txt (truncated to ${#SHORT_NOTES} chars) ==="
+          # One file per track we publish to: GPP reads the notes for
+          # whichever track it is writing, so the promote steps below need
+          # alpha.txt / beta.txt or they would ship empty notes.
+          for track in internal alpha beta; do
+            printf '%s\n' "$SHORT_NOTES" > "android/app/src/main/play/release-notes/en-US/$track.txt"
+          done
+          echo "=== Play release notes (truncated to ${#SHORT_NOTES} chars) ==="
           cat android/app/src/main/play/release-notes/en-US/internal.txt
 
       - name: Build glow-web dist/
@@ -811,13 +816,44 @@ jobs:
       - name: Capacitor sync (Android)
         run: npx cap sync android
 
-      - name: Gradle bundleRelease + publish
+      - name: Gradle bundleRelease
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          cd android && ./gradlew :app:bundleRelease :app:publishReleaseBundle --no-daemon
+          cd android && ./gradlew :app:bundleRelease --no-daemon
+
+      - name: Publish to Play internal
+        # Split from the bundle build so dry_run can skip the upload while
+        # still producing the signed AAB artifact below.
+        if: inputs.dry_run != 'true'
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          cd android && ./gradlew :app:publishReleaseBundle --no-daemon
+
+      - name: Promote to closed + open testing
+        if: inputs.dry_run != 'true'
+        # The AAB is already uploaded — promoting reuses that same artifact
+        # instead of re-uploading it, so the version code stays identical
+        # across all three tracks. Both promotes read from `internal`
+        # (promoting does not remove the release from the source track).
+        # `production` is deliberately absent: that step stays manual in
+        # Play Console.
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          cd android
+          for track in alpha beta; do
+            ./gradlew :app:promoteReleaseArtifact --no-daemon \
+              --from-track internal --promote-track "$track"
+          done
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v7

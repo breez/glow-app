@@ -217,7 +217,7 @@ Current model:
 |---|---|---|
 | PR open/push | `web` only — tsc + lint + vitest + `cap doctor` + glow-web-submodule-pushed-to-origin check | ~3–5 min Linux |
 | Push to `main` | **nothing** — admin-merged PRs already passed their gate | 0 |
-| `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB → Play Internal) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
+| `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB to Play internal + closed + open testing) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
 | `preview-*` / `rc-*` tag push | Firebase App Distribution: warm-sdk-{linux,macos} + `web` + `ios-preview` + `android-preview` | ~250 min |
 | `workflow_dispatch` | Dev picks `target` × `distribution` × `version` × `dry_run` inputs (see table below) | varies |
 
@@ -237,7 +237,7 @@ or `gh workflow run`:
 | Input | Values | Required | Notes |
 |---|---|---|---|
 | `target` | `ios` \| `android` \| `both` | yes | Platform(s) to build. `both` fires the matching iOS + Android jobs in parallel. |
-| `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play Internal (Android). |
+| `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play internal/closed/open testing (Android). |
 | `version` | `MAJOR.MINOR.PATCH` | only when `distribution=store` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
 | `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store`. Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
 | `ios_enable_buy` | `true` \| `false` | no (default `false`) | Buy Bitcoin is on by default in every build; iOS store builds disable it via `VITE_IOS_DISABLE_BUY=true` for App Review Guideline 3.1.5(iii). This toggle keeps the button in a store build — TestFlight open-beta only, never submit such a build for App Store review. `release-*` tag builds always disable it. |
@@ -251,7 +251,7 @@ or `gh workflow run`:
 | iOS TestFlight hotfix (was `ios-testflight`) | `ios` | `store` | `0.0.2` | — |
 | Android debug APK (was `android-debug`) | `android` | `none` | — | — |
 | Android Firebase (was `android-firebase`) | `android` | `firebase` | — | — |
-| Android Play Internal (was `android-internal`) | `android` | `store` | `0.0.2` | — |
+| Android Play testing tracks (was `android-internal`) | `android` | `store` | `0.0.2` | — |
 | Full release dry-run (was `full-release`) | `both` | `store` | `0.0.3` | `true` |
 | Full release (pre-tag verification) | `both` | `store` | `0.0.3` | `false` |
 

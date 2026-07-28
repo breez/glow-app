@@ -565,8 +565,21 @@ maintainer pointer list.
   `android/app/build.gradle`) handles CI-driven Play uploads.
   Pinned to 3.x — GPP 4.0.0 needs AGP 9, we ship AGP 8.
   Release notes path:
-  `android/app/src/main/play/release-notes/en-US/internal.txt`,
+  `android/app/src/main/play/release-notes/en-US/<track>.txt`,
   overwritten per-release by `scripts/ci/release-notes.sh`.
+  `internal.txt`, `alpha.txt` and `beta.txt` all get the same
+  body, because GPP reads the file matching whichever track it
+  is writing and the promote steps would otherwise ship a
+  release with empty notes.
+- **Three testing tracks per release tag**: `android-release`
+  uploads the AAB once to `internal`, then runs
+  `promoteReleaseArtifact` twice (`internal` to `alpha`, i.e.
+  closed testing, and `internal` to `beta`, i.e. open testing).
+  Promoting reuses the uploaded artifact rather than
+  re-uploading, so one version code covers all three tracks,
+  and it leaves the release on the source track. `production`
+  is deliberately never touched by CI: promoting to production
+  stays a manual Play Console action.
 
 ### iOS release signing — direct-secrets (no match)
 
