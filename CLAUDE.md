@@ -560,7 +560,7 @@ maintainer pointer list.
   becomes known after first enrollment upload (must then be
   appended to `keys.bt.webauthn` assetlinks under
   `technology.breez.glow.dev`).
-- `gradle-play-publisher` 3.12.1
+- `gradle-play-publisher` 3.13.0
   (`com.github.triplet.play` plugin in
   `android/app/build.gradle`) handles CI-driven Play uploads.
   Pinned to 3.x — GPP 4.0.0 needs AGP 9, we ship AGP 8.
