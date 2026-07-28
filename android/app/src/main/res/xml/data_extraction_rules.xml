@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+: allowBackup="false" disables cloud backup but NOT
+     device-to-device transfer. Nothing in this app's sandbox is worth
+     restoring: the seed ciphertext is sealed by a non-exportable
+     Keystore key that never leaves the device, so a restored copy is
+     undecryptable junk that makes hasStoredSeed() lie. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
