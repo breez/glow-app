@@ -558,6 +558,49 @@ maintainer pointer list.
   expected certificate at all is itself a failure. Covered by
   `scripts/ci/verify-aab-signature.test.sh` (needs a JDK, runs
   in a couple of seconds, no framework).
+- **R8 (`minifyEnabled true` on `release`)**: shrink + obfuscate +
+  optimize, using `proguard-android-optimize.txt` plus
+  `android/app/proguard-rules.pro`. Not optional for much longer: from
+  February 2027 Play requires at least 25% optimization, shrinking and
+  obfuscation of DEX for any app shipping more than 10 MB of it, and this
+  app's DEX was 15.1 MB unminified. R8 **full mode** has been the default
+  since AGP 8.0, so there is no half-measure here: default constructors
+  are not implicitly kept and annotations survive only on explicitly
+  matched items. Two rule groups are load-bearing:
+  - The Spark SDK AAR ships **no** consumer proguard rules and reaches
+    the Rust core through JNA, which resolves native functions,
+    `Structure` fields and callback interfaces by name at runtime.
+    `breez_sdk_spark.**`, `technology.breez.spark.**` and
+    `com.sun.jna.**` are kept whole. JNA also carries desktop AWT
+    helpers referencing `java.awt.*`, absent on Android, hence
+    `-dontwarn java.awt.**` (without it R8 hard-fails the build).
+  - Capacitor plugin classes need nothing here: `@capacitor/android`
+    ships `consumerProguardFiles` covering `@CapacitorPlugin` and
+    `extends com.getcapacitor.Plugin`, which reaches both in-house
+    plugins too. Verified in `mapping.txt` — every `*Plugin` class
+    keeps its original name.
+  - `shrinkResources` stays **off** on purpose: the splash plugin
+    resolves `splash_logo` by name from `capacitor.config.ts`, and
+    resource shrinking drops name-only references.
+  - The `debug` buildType minifies only when `MINIFY_DEBUG=true`, which
+    CI's `android-preview` job exports. Firebase preview APKs therefore
+    exercise the same R8 pass the release AAB does, so a wrong keep rule
+    surfaces on an internal tester's device rather than after a Play
+    upload. Local `make deploy-android` stays unminified and fast.
+  - Play gets the mapping on its own: AGP embeds it in the AAB at
+    `BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`
+    and Play reads it on upload. Do not reach for a GPP setting to send
+    it — GPP wires a mapping only on its APK publish path, and we publish
+    a bundle. A sideloaded build (Obtainium / Zapstore) has no such
+    channel, so a crash report from one stays obfuscated; the mapping for
+    a given release is in the `android-release` run's build output.
+  - **AGP 9 is out (9.0.1, January 2026) and we are still on 8.13.2**,
+    because gradle-play-publisher 4.x is what needs AGP 9 and we pin GPP
+    3.x. Two things to know when that upgrade happens: AGP 9 *rejects*
+    `proguard-android.txt` and requires the `-optimize` variant, which is
+    already what this build uses, and AGP 9.3 replaces `minifyEnabled`
+    with an `optimization { enable = true }` block. Neither changes
+    anything for AGP 8 — do not pre-migrate the DSL here.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via
