@@ -1,5 +1,10 @@
 ext {
-    minSdkVersion = 24
+    // 28, not Capacitor's default 24: androidx.credentials passkey creation
+    // needs API 28+, and the passkey ceremony is the primary onboarding
+    // path with no API-level guard in front of it. Play derives store
+    // compatibility from this, so a lower floor offers the install to
+    // devices that dead-end at account creation.
+    minSdkVersion = 28
     compileSdkVersion = 36
     targetSdkVersion = 36
     androidxActivityVersion = '1.11.0'
