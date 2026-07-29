@@ -219,6 +219,18 @@ both patches together (both are in the dependabot ignore list).
     The IME inset is zeroed into the WebView whenever we own IME
     handling (Android 15+), including mid-animation, so Chromium
     never self-shrinks or pans.
+  - **IME-ownership gate (#139)**: the padding also requires
+    `InputMethodManager.isAcceptingText()`, i.e. the IME is editing
+    text in THIS process. Launching over another app's dismissing
+    keyboard (the launcher's app search) reports the IME visible for
+    the first frames, and padding for it shrank the WebView a keyboard
+    height, painting the wallet's action bar mid-screen. Gating on
+    `hasWindowFocus()` instead does NOT work (#140): the focus-gain
+    `requestApplyInsets` below fires while the departing keyboard is
+    still reported visible, so it re-lands the padding it was meant to
+    skip. Not fixable in glow-web either — the padding sits on the
+    WebView's PARENT, so those pixels are outside the WebView and no
+    CSS can paint there.
   - Also asks for a fresh inset dispatch on window-focus gain so the
     launch-time `--safe-area-inset-*` CSS injection self-corrects
     after the app-open transition.
