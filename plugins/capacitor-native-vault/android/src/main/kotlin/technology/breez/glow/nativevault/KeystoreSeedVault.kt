@@ -102,10 +102,22 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             // Write iv + ciphertext atomically. Atomicity protects the
             // invariant that whenever PREFS_KEY_CIPHERTEXT is present,
             // the matching IV is also present.
-            prefs.edit()
+            //
+            // commit(), not apply(): this is the only copy of the seed, and
+            // apply() returns before the disk write and swallows its result,
+            // so a full disk or IO error would resolve the JS promise as a
+            // success and the seed would be gone on next launch.
+            val committed = prefs.edit()
                 .putString(PREFS_KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
                 .putString(PREFS_KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
-                .apply()
+                .commit()
+
+            if (!committed) {
+                return SeedVaultResult.Error(
+                    NativeVaultErrorCode.UNKNOWN,
+                    "Failed to persist encrypted seed to disk",
+                )
+            }
 
             SeedVaultResult.Ok(Unit)
         } catch (e: UserNotAuthenticatedException) {
@@ -218,10 +230,19 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val iv = cipher.iv
             val ciphertext = cipher.doFinal(seed.toByteArray(Charsets.UTF_8))
 
-            prefs.edit()
+            // commit(), not apply(): see finishEncryptAndStore. This tier is
+            // the shipped default, so it is the copy that matters most.
+            val committed = prefs.edit()
                 .putString(PREFS_KEY_IV_DEVICE_ONLY, Base64.encodeToString(iv, Base64.NO_WRAP))
                 .putString(PREFS_KEY_CIPHERTEXT_DEVICE_ONLY, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
-                .apply()
+                .commit()
+
+            if (!committed) {
+                return SeedVaultResult.Error(
+                    NativeVaultErrorCode.UNKNOWN,
+                    "Failed to persist encrypted seed to disk",
+                )
+            }
 
             SeedVaultResult.Ok(Unit)
         } catch (e: GeneralSecurityException) {

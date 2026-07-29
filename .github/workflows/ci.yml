@@ -826,8 +826,13 @@ jobs:
 
       - name: Publish to Play internal
         # Split from the bundle build so dry_run can skip the upload while
-        # still producing the signed AAB artifact below.
-        if: inputs.dry_run != 'true'
+        # still producing the signed AAB artifact below. `dry_run` is a
+        # boolean input, so it must not be compared against the STRING
+        # 'true': GitHub coerces the mismatched operands to numbers, the
+        # string becomes NaN, and every comparison with NaN is false, which
+        # made the old `!= 'true'` guard always pass. On tag pushes
+        # `inputs.dry_run` is null, so the negation still runs the step.
+        if: ${{ !inputs.dry_run }}
         env:
           RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
           RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
@@ -836,7 +841,7 @@ jobs:
           cd android && ./gradlew :app:publishReleaseBundle --no-daemon
 
       - name: Promote to closed + open testing
-        if: inputs.dry_run != 'true'
+        if: ${{ !inputs.dry_run }}
         # The AAB is already uploaded — promoting reuses that same artifact
         # instead of re-uploading it, so the version code stays identical
         # across all three tracks. Both promotes read from `internal`
@@ -974,6 +979,9 @@ jobs:
         run: ./scripts/ci/build-ios-ipa.sh Release app-store-connect
 
       - name: Upload to TestFlight via fastlane
+        # Same boolean guard as the Play upload: without it dry_run built,
+        # signed, and then shipped the build to TestFlight anyway.
+        if: ${{ !inputs.dry_run }}
         working-directory: ios/App
         env:
           # Dual auth — Fastfile picks API key if all three set, else

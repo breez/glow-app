@@ -56,8 +56,13 @@
 	     (Face ID dialog, share sheet, keyboard) dark to match. -->
 	<key>UIUserInterfaceStyle</key>
 	<string>Dark</string>
+	<!-- Consumed by the app-lock biometric gate and the legacy
+	     biometric-bound seed tier. The passkey ceremony goes through
+	     ASAuthorization and never reads this string, so it must not
+	     describe passkeys: a user denying it based on the wrong
+	     description can only undo that in iOS Settings. -->
 	<key>NSFaceIDUsageDescription</key>
-	<string>Authenticate with Face ID to access your wallet via passkey</string>
+	<string>Use Face ID to unlock Glow and to protect your recovery phrase on this device.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Glow uses the camera to scan Lightning and Bitcoin payment QR codes.</string>
 	<!-- App Store export compliance (Phase 4C). Setting this to false
