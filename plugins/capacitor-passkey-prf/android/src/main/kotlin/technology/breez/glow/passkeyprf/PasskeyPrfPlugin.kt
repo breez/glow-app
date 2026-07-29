@@ -325,7 +325,11 @@ class PasskeyPlugin : Plugin() {
     }
 
     private fun passkeyErrorCode(e: PasskeyException): String = when (e) {
-        is PasskeyException.Prf -> "GENERIC_ERROR"  // SDK wraps PrfProviderException; the typed one surfaces via `is PrfProviderException` above
+        // The SDK wraps every PrfProviderException in here, and this arm is
+        // matched before the bare `is PrfProviderException` one in errorCode,
+        // so unwrap: collapsing to GENERIC_ERROR loses the no-credential,
+        // cancelled, and already-exists cases the JS routing depends on.
+        is PasskeyException.Prf -> prfErrorCode(e.v1)
         is PasskeyException.RelayConnectionFailed -> "RELAY_CONNECTION_FAILED"
         is PasskeyException.NostrWriteFailed -> "NOSTR_WRITE_FAILED"
         is PasskeyException.NostrReadFailed -> "NOSTR_READ_FAILED"
