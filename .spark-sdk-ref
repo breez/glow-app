@@ -6,7 +6,7 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk feat/android-prf-eval-at-create (2a50e2a36), the
-# eval-at-create branch under review. Matches the vendored
+# Pin: spark-sdk main (570ce64e3), with the passkey eval-at-create
+# work merged. Matches the vendored
 #   @breeztech/breez-sdk-spark tarball glow-web ships at main.
-2a50e2a365d64e381409caa2dcfec223aa101cbc
+570ce64e3d4172d82d5108579532561982308761
