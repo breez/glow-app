@@ -301,6 +301,10 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             case .InvalidPrfOutput: return "INVALID_PRF_OUTPUT"
             case .MnemonicError: return "MNEMONIC_ERROR"
             case .InvalidSalt: return "INVALID_SALT"
+            // A passkey exists on the device even though the ceremony
+            // failed. Its own code so the web layer signs in with it
+            // rather than offering a create that would strand it.
+            case .CreatedButNotDerived: return "CREATED_BUT_NOT_DERIVED"
             case .Generic: return "GENERIC_ERROR"
             }
         }
