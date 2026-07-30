@@ -337,6 +337,10 @@ class PasskeyPlugin : Plugin() {
         is PasskeyException.InvalidPrfOutput -> "INVALID_PRF_OUTPUT"
         is PasskeyException.MnemonicException -> "MNEMONIC_ERROR"
         is PasskeyException.InvalidSalt -> "INVALID_SALT"
+        // A passkey exists on the device even though the ceremony failed.
+        // Its own code so the web layer signs in with it rather than
+        // offering a create that would strand it.
+        is PasskeyException.CreatedButNotDerived -> "CREATED_BUT_NOT_DERIVED"
         is PasskeyException.Generic -> "GENERIC_ERROR"
     }
 
