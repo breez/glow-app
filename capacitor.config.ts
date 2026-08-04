@@ -56,6 +56,25 @@ const config: CapacitorConfig = {
   // AppTheme.NoActionBar windowBackground, and HomePage's own background,
   // so the whole cold-start hand-off stays one flat color.
   backgroundColor: '#0f0f18',
+  // `cap sync ios` regenerates ios/App/CapApp-SPM/Package.swift from the
+  // app's IPHONEOS_DEPLOYMENT_TARGET, writing `platforms: [.iOS(.vNN)]`
+  // (util/spm.js:89-98 in @capacitor/cli 8.3.0). Its default manifest
+  // header is `swift-tools-version: 5.9`, where `.v18` does not exist yet,
+  // so raising the deployment target to 18 made every sync emit a package
+  // that fails to resolve ("error: 'v18' is unavailable"). This is the
+  // supported override (spm.js:91); anything from 6.0 up knows `.v18`.
+  //
+  // Safe for the generated package: its only source file is a one-line
+  // `public let isCapacitorApp = true`, so Swift 6 language mode has
+  // nothing to complain about, and every dependency keeps its own tools
+  // version (capacitor-passkey-prf is already on 6.0).
+  experimental: {
+    ios: {
+      spm: {
+        swiftToolsVersion: '6.0',
+      },
+    },
+  },
   server: {
     // HTTPS scheme required for SharedArrayBuffer support in Android WebView
     androidScheme: 'https',
