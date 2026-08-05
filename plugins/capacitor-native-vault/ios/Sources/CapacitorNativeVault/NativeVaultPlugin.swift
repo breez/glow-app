@@ -1,5 +1,6 @@
 import Capacitor
 import Foundation
+import UIKit
 
 /// Capacitor plugin entry point for `NativeVault`. Exposes five methods to
 /// JS (`checkBiometry`, `hasStoredSeed`, `storeSeed`, `retrieveSeed`,
@@ -34,6 +35,7 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "storeSeedDeviceOnly", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "retrieveSeedDeviceOnly", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clearSeedDeviceOnly", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "copySensitive", returnType: CAPPluginReturnPromise),
     ]
 
     // Trait-style providers. Pinned to concrete types here; swap the
@@ -221,6 +223,33 @@ public class NativeVaultPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve()
         case .error(let code, let message):
             call.reject(message, code.rawValue)
+        }
+    }
+
+    // MARK: - Sensitive clipboard
+
+    /// Copy text the OS should treat as a secret.
+    ///
+    /// `expirationDate` is the point of doing this natively: the pasteboard
+    /// drops the value on its own, so a recovery phrase does not outlive the
+    /// app if the JS clear timer never runs. `localOnly` keeps it off
+    /// Universal Clipboard, so the phrase is not handed to the user's other
+    /// devices.
+    @objc func copySensitive(_ call: CAPPluginCall) {
+        guard let value = call.getString("value") else {
+            call.reject("Missing required parameter: value", NativeVaultErrorCode.unknown.rawValue)
+            return
+        }
+        let ttl = call.getDouble("ttlSeconds") ?? 60
+        DispatchQueue.main.async {
+            UIPasteboard.general.setItems(
+                [["public.utf8-plain-text": value]],
+                options: [
+                    .expirationDate: Date().addingTimeInterval(ttl),
+                    .localOnly: true,
+                ]
+            )
+            call.resolve()
         }
     }
 }
