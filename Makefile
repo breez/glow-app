@@ -77,9 +77,23 @@ IOS_DEVICECTL_JSON := /tmp/devicectl-devices.json
 IOS_DEVICE_ID ?= $(shell xcrun devicectl list devices --json-output $(IOS_DEVICECTL_JSON) >/dev/null 2>&1 && python3 -c "import json,sys; d=json.load(open('$(IOS_DEVICECTL_JSON)'))['result']['devices']; print(next((x['hardwareProperties']['udid'] for x in d if x.get('hardwareProperties',{}).get('productType','').startswith('iPhone') and x.get('connectionProperties',{}).get('transportType')=='wired'), ''))" 2>/dev/null)
 ANDROID_DEVICE_ID ?= $(shell adb devices -l 2>/dev/null | grep 'device usb' | awk '{print $$1}')
 
+# Passkey relying party for `.dev` builds.
+#
+# Debug/preview builds must not share a passkey RP with production: an
+# RP-listed cert is a credential on that RP (the seed derives from a
+# passkey PRF gated on package + cert), so dev builds get their own RP.
+#
+# INTENTIONALLY EMPTY until keys-dev.breez.technology is serving its own
+# assetlinks.json + apple-app-site-association. Empty makes glow-web fall
+# back to the production RP, i.e. today's behaviour, so nothing breaks
+# before the infra exists. Flip to `keys-dev.breez.technology` (here and
+# in the four `.dev` CI jobs) once it is live. See DEVELOPMENT.md
+# "Passkey relying party (RP) split".
+DEV_PASSKEY_RP_ID ?=
+
 # ---------- High-level targets ----------
 
-.PHONY: setup resolve-sdk sdk sdk-ios sdk-android sdk-wasm strip-xcframework-dsyms web sync ios android deploy-ios deploy-android clean help assets
+.PHONY: setup resolve-sdk sdk sdk-ios sdk-android sdk-wasm strip-xcframework-dsyms web web-dev sync ios android deploy-ios deploy-android clean help assets
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -99,6 +113,9 @@ sdk: resolve-sdk sdk-ios sdk-android sdk-wasm ## Build Spark SDK for all platfor
 
 web: ## Build glow-web (uses glow-web's vendored SDK tarball; see SDK_WASM_TGZ comment)
 	cd glow-web && npm install && npx vite build
+
+web-dev: export VITE_NATIVE_PASSKEY_RP_ID = $(DEV_PASSKEY_RP_ID)
+web-dev: web ## Build glow-web for `.dev` builds (dev passkey RP)
 
 sync: ## Copy web assets to native projects (without regenerating native configs)
 	npx cap copy
@@ -189,7 +206,7 @@ strip-xcframework-dsyms: ## Strip DebugSymbolsPath from spark-sdk's xcframework 
 			$(SDK_SWIFT_DIR)/breez_sdk_sparkFFI.xcframework/Info.plist 2>/dev/null || true; \
 	done
 
-ios: resolve-sdk web sync strip-xcframework-dsyms ## Build iOS app
+ios: resolve-sdk web-dev sync strip-xcframework-dsyms ## Build iOS app (debug, `.dev` bundle ID)
 	xcodebuild -project ios/App/App.xcodeproj -scheme App \
 		-destination 'generic/platform=iOS' \
 		-configuration Debug \
@@ -197,7 +214,7 @@ ios: resolve-sdk web sync strip-xcframework-dsyms ## Build iOS app
 		CODE_SIGN_STYLE=Automatic \
 		build
 
-android: resolve-sdk web sync ## Build Android debug APK
+android: resolve-sdk web-dev sync ## Build Android debug APK (`.dev` applicationId)
 	cd android && ANDROID_HOME=$(ANDROID_HOME) ./gradlew assembleDebug
 
 deploy-ios: ios ## Build and install on connected iOS device

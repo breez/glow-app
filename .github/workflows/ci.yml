@@ -103,6 +103,30 @@ permissions:
   contents: read
 
 jobs:
+  # Signing material (keystores, certs, provisioning profiles, service
+  # accounts) must live in GitHub secrets, never in the tree. .gitignore
+  # blocks an accidental `git add`; this catches an already-tracked file
+  # or a `git add -f` bypass, on every PR and push. Keep in sync with the
+  # signing-material patterns in .gitignore.
+  guard-signing-material:
+    name: No signing material in the tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if any keystore, cert, or profile is tracked
+        run: |
+          set -euo pipefail
+          hits=$(git ls-files \
+            '*.keystore' '*.jks' '*.p12' '*.p8' '*.mobileprovision' \
+            'play-service-account.json' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Signing material must never be committed. Tracked file(s):"
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: no signing material tracked"
+
   # Gate on workflow_dispatch input combinations. Catches invalid combos
   # (distribution=store with no version, malformed version, etc.) in
   # <30s on a Linux runner before any macOS runner spins up. Wired into
@@ -398,7 +422,7 @@ jobs:
         # without it, SDK init fails on every launch.
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
-        run: make web
+        run: make web-dev
 
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
@@ -469,7 +493,7 @@ jobs:
       - name: Build glow-web dist/
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
-        run: make web
+        run: make web-dev
 
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
@@ -560,7 +584,7 @@ jobs:
       - name: Build glow-web dist/
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
-        run: make web
+        run: make web-dev
 
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
@@ -665,7 +689,7 @@ jobs:
       - name: Build glow-web dist/
         env:
           VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
-        run: make web
+        run: make web-dev
 
       - name: Install glow-app deps (applies patch-package patches)
         run: npm ci
