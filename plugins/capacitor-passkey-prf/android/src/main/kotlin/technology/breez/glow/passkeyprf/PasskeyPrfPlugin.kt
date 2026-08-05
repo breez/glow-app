@@ -46,12 +46,30 @@ class PasskeyPlugin : Plugin() {
     @Volatile
     private var rpId: String? = null
 
+    private companion object {
+        /**
+         * RP IDs this app may run a ceremony against. Must stay in step with
+         * the domains in assetlinks.json (and iOS's associated-domains
+         * entitlement): a domain here that the app is not associated with
+         * dead-ends the OS sheet.
+         */
+        val ALLOWED_RP_IDS = setOf("keys.breez.technology")
+    }
+
     @PluginMethod
     fun initialize(call: PluginCall) {
         val rpId = call.getString("rpId")
         val rpName = call.getString("rpName")
         if (rpId == null || rpName == null) {
             call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
+            return
+        }
+        // The RP is ours to decide, not the WebView's. Credential Manager
+        // would reject a domain this app is not associated with anyway, but
+        // only after showing the user a sheet naming that domain, so a
+        // compromised WebView could still run a convincing phishing prompt.
+        if (rpId !in ALLOWED_RP_IDS) {
+            call.reject("rpId '$rpId' is not an associated domain of this app", "INVALID_ARGUMENT")
             return
         }
         this.rpId = rpId
