@@ -91,7 +91,12 @@ android {
             // Use the env-driven release config when populated,
             // fall back to debug signing for local smoke builds.
             signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
-            minifyEnabled false
+            // R8 raises the cost of decompiling a shipped wallet build.
+            // Keep rules live in proguard-rules.pro: the reflective
+            // surfaces here (Capacitor's JS bridge, JNA-backed SDK
+            // bindings) fail at run time when stripped, not at build
+            // time, so treat that file as load-bearing.
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals
             // can symbolicate crashes in the Rust SDK libs (Play warns
