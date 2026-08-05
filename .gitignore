@@ -53,5 +53,4 @@ Thumbs.db
 *.p8
 *.jks
 *.keystore
-!android/debug.keystore
 play-service-account.json

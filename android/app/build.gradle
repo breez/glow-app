@@ -10,11 +10,11 @@ android {
         // via `applicationIdSuffix ".dev"` below, so debug APKs get
         // `technology.breez.glow.dev` without any flavor plumbing.
         // Both IDs are registered on the Apple Developer portal for
-        // iOS parity; the debug keystore SHA is in
-        // keys.breez.technology/.well-known/assetlinks.json under
-        // `technology.breez.glow.dev`; the Play-rewritten release
-        // cert SHA lands under `technology.breez.glow` after first
-        // Play App Signing enrollment.
+        // iOS parity. The Play-rewritten release cert SHA sits under
+        // `technology.breez.glow` in
+        // keys.breez.technology/.well-known/assetlinks.json after first
+        // Play App Signing enrollment. `.dev` builds belong on the
+        // separate dev RP, never on that production one.
         applicationId "technology.breez.glow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
@@ -35,24 +35,30 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    // Sign debug builds with the committed android/debug.keystore
-    // rather than Gradle's auto-generated ~/.android/debug.keystore.
-    //
-    // Why: the technology.breez.glow.dev package has the SHA-256
-    // fingerprint of *this* specific keystore registered in
-    // keys.breez.technology/.well-known/assetlinks.json. Without
-    // a committed keystore, every fresh CI runner (and every new
-    // dev machine) signs with a different cert and breaks passkey
-    // auth — the RP can't validate the caller. Committing it is
-    // standard for private repos; debug keystores ship with
-    // well-known passwords ("android"/"android") and can only sign
-    // debug builds, not publishable releases.
     signingConfigs {
+        // Debug signing is env-driven for the same reason release is:
+        // a signing cert listed in a passkey RP's assetlinks.json is a
+        // credential on that RP, not a shareable test fixture, because
+        // the seed derives from a passkey PRF evaluation gated on
+        // (package, cert). Never commit a keystore here. See the
+        // "Android debug signing" notes in DEVELOPMENT.md.
+        //
+        // When the envs are absent (normal local dev), storeFile stays
+        // unset and AGP's per-machine ~/.android/debug.keystore signs
+        // the build. Passkey flows need that cert registered on whichever
+        // RP the build targets — for local dev, the dev RP, not
+        // production.
         debug {
-            storeFile rootProject.file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
+            def debugKeystorePathEnv = System.getenv('DEBUG_KEYSTORE_PATH')
+            def debugKeystorePasswordEnv = System.getenv('DEBUG_KEYSTORE_PASSWORD')
+            def debugKeyAliasEnv = System.getenv('DEBUG_KEY_ALIAS')
+            def debugKeyPasswordEnv = System.getenv('DEBUG_KEY_PASSWORD')
+            if (debugKeystorePathEnv && debugKeystorePasswordEnv && debugKeyAliasEnv && debugKeyPasswordEnv) {
+                storeFile file(debugKeystorePathEnv)
+                storePassword debugKeystorePasswordEnv
+                keyAlias debugKeyAliasEnv
+                keyPassword debugKeyPasswordEnv
+            }
         }
         // Release signing is env-driven so the upload keystore + its
         // passwords never live in source. CI decodes

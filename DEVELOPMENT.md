@@ -176,15 +176,15 @@ make deploy-android   # build + install on connected Android device
 
 ### iOS
 
-- **Bundle ID**: `technology.breez.glow` (release → TestFlight / App Store), `technology.breez.glow.dev` (debug — has shared debug keystore SHA in assetlinks + AASA). Per-configuration split in `ios/App/App.xcodeproj/project.pbxproj` (Debug config → `.dev`, Release config → `.glow`).
-- **Entitlements**: `webcredentials:keys.breez.technology` (Associated Domains)
+- **Bundle ID**: `technology.breez.glow` (release → TestFlight / App Store), `technology.breez.glow.dev` (debug). Per-configuration split in `ios/App/App.xcodeproj/project.pbxproj` (Debug config → `.dev`, Release config → `.glow`).
+- **Entitlements**: `webcredentials:keys.breez.technology` (Associated Domains). The `.dev` bundle ID moves to the dev RP: see "Passkey relying party (RP) split".
 - **Minimum deployment**: iOS 15 (passkey PRF requires iOS 18+, graceful fallback on older)
 - **AASA caching**: Apple caches `apple-app-site-association` aggressively. If passkeys fail on a new bundle ID, go to Settings → Developer → Associated Domains Development → toggle to force refresh.
 
 ### Android
 
 - **Application ID**: base `technology.breez.glow` with `applicationIdSuffix ".dev"` on the debug buildType → debug APKs = `technology.breez.glow.dev`, release AABs = `technology.breez.glow`. Split via buildType suffix (no product flavors needed). Enables debug + release side-by-side installs on the same device.
-- **Asset Links**: `keys.breez.technology/.well-known/assetlinks.json` must list the app's package + signing cert
+- **Asset Links**: the RP's `/.well-known/assetlinks.json` must list the app's package + signing cert. Release goes on `keys.breez.technology`; `.dev` belongs on the dev RP, never the production one (see "Android debug signing")
 - **Minimum SDK**: 24 (passkey PRF requires API 28+, runtime check)
 - **Physical device required** — emulators can't complete WebAuthn registration
 
@@ -460,75 +460,137 @@ Set via `gh secret set <NAME>` or the Settings → Secrets UI.
 
 ### Android debug signing
 
-`android/debug.keystore` is a **shared project debug keystore**
-committed to the repo. It's explicitly NOT a secret — treat it
-the way you'd treat any public test fixture.
+**Never commit a keystore to this repo** — release or debug.
+`android/debug.keystore` used to be committed here; it has been
+removed, and the cert it held is retired (see below).
 
-Subject line (for identification):
-`CN=glow-app Shared Debug Keystore, O=Breez, C=US`
+By default, debug builds are signed with AGP's per-machine
+`~/.android/debug.keystore`, auto-generated on first build. No
+setup, no shared secret, and every developer has a different
+cert.
 
-Fingerprints:
+When a *stable* debug cert is genuinely needed — the
+`android-preview` CI job ships a debug APK to Firebase App
+Distribution, and testers need passkey flows to work in it —
+`signingConfigs.debug` in `android/app/build.gradle` reads one
+from the environment, the same way `signingConfigs.release`
+already does:
 
 ```
-SHA-1   : ED:85:05:FF:85:99:23:82:4F:5A:B6:75:1D:28:AF:8F:13:17:E5:D9
-SHA-256 : C8:55:12:70:A6:78:2F:1F:43:91:2F:0B:EF:F0:1F:AD:9F:54:23:67:
-          9C:9D:70:74:AE:74:F4:FD:E7:86:EE:43
+DEBUG_KEYSTORE_PATH
+DEBUG_KEYSTORE_PASSWORD
+DEBUG_KEY_ALIAS
+DEBUG_KEY_PASSWORD
 ```
 
-Gradle's `signingConfigs.debug` in `android/app/build.gradle`
-points at this keystore, with the well-known debug credentials
-(`android` / `android`). Every build — local, CI, contributor
-checkout — signs with the same SHA-256, which is registered
-alongside `technology.breez.glow.dev` in
-`keys.breez.technology/.well-known/assetlinks.json` so passkey
-authentication works.
+All four must be set or the block is skipped. CI decodes the
+keystore from a GitHub secret to a `$RUNNER_TEMP` path and
+exports these; the file never lands in the working tree. Treat
+that keystore with the same care as the release upload key.
 
-**Why committing it is safe** (even when this repo goes public):
+#### Why a debug cert is not "just a test fixture"
 
-- Debug keystores can only sign debug builds. They cannot push
-  an update over a Play-installed release build (different
-  cert + Play App Signing protect that boundary).
-- The release signing key lives in GitHub Actions secrets
-  (Phase 4C), never in the repo.
-- The real attack gate is "can the attacker get their APK onto
-  a victim's device?" — not "can the attacker reproduce the
-  debug signature?" Android App Links + passkeys bind
-  `RP domain + package name + signing cert`; anyone cloning
-  the repo can build an APK with the same cert, but to exploit
-  the passkey flow they'd also need a victim who sideloads
-  their clone.
-- This is the canonical convention. Prior art:
-  [CoreProc/android-debug-keystore](https://github.com/CoreProc/android-debug-keystore),
-  Google's own [App Links verification guide](https://developer.android.com/training/app-links/verify-android-applinks)
-  (recommends listing debug + release fingerprints
-  comma-separated in assetlinks), and most OSS Android /
-  Capacitor / React Native repos that ship a checked-in debug
-  keystore for exactly this reason.
+The rationale this section used to carry — "debug keystores can
+only sign debug builds, so committing one is safe" — reasoned
+only about the **Play-update boundary**: an attacker can't push
+an update over a Play-installed release build. That's true, but
+it's the wrong boundary for this app.
 
-**Rotating the keystore**: if this keystore ever needs to
-change (e.g. stronger algorithm, expiry, one-off incident):
+The one that matters is the **passkey RP boundary**. A signing
+cert listed in an RP's `assetlinks.json` is a credential on that
+RP, because this app derives its seed from a passkey PRF
+evaluation gated on `(package name, signing cert)`. So a cert
+registered on the RP carries the same weight as any other
+production credential, not that of a shareable fixture. Two rules
+follow:
 
-1. Generate a new keystore:
+1. **Debug and release must not share a passkey RP.** `.dev`
+   builds use a dedicated dev RP so a debug cert never sits in the
+   same file as production credentials. See "Passkey relying party
+   (RP) split" below.
+2. **Adding a `(package, cert)` pair to a passkey RP is a security
+   decision, not a config change**, and should be reviewed as one.
+
+The debug cert formerly committed here is **retired**: never
+re-register it on any RP, and discard any copy recovered from git
+history rather than reusing it. Removing the file from the repo is
+not sufficient by itself; what closes it is the cert no longer
+being trusted by any RP.
+
+**Generating a replacement stable debug keystore** (only if
+`android-preview` passkey testing actually needs one — otherwise
+skip it and let each machine use its own):
+
+1. Generate it **outside the repo**, with a real passphrase:
    ```bash
-   keytool -genkey -v \
-     -keystore android/debug.keystore \
-     -storepass android -alias androiddebugkey -keypass android \
-     -keyalg RSA -keysize 2048 -validity 36500 \
-     -dname "CN=glow-app Shared Debug Keystore, O=Breez, C=US"
+   keytool -genkeypair -v \
+     -keystore ~/glow-debug-preview.jks \
+     -alias glow-preview -keyalg RSA -keysize 4096 -validity 3650 \
+     -dname "CN=glow-app Preview Debug, O=Breez, C=US"
    ```
-2. Extract the new SHA-256:
+2. Read its SHA-256:
    ```bash
-   keytool -list -v -keystore android/debug.keystore \
-     -alias androiddebugkey -storepass android | grep SHA256
+   keytool -list -v -keystore ~/glow-debug-preview.jks -alias glow-preview | grep SHA256
    ```
-3. **Add** (don't replace) the new fingerprint to the
-   `technology.breez.glow.dev` entry in
-   `keys.breez.technology/.well-known/assetlinks.json`.
-   Keep the old fingerprint live for a grace period so
-   devs with older checkouts can still authenticate.
-4. After the grace period and all installs have picked up
-   the new APK, the old fingerprint can be removed from
-   assetlinks.
+3. Store it as GitHub secrets (`base64 -i ~/glow-debug-preview.jks`
+   into `DEBUG_KEYSTORE_BASE64`, plus the password/alias secrets).
+   Never add it to the working tree.
+4. Register the fingerprint on the **dev RP only**
+   (`keys-dev.breez.technology`), never on
+   `keys.breez.technology`. Registering it on the production RP
+   re-creates the exposure this section exists to prevent.
+
+### Passkey relying party (RP) split
+
+`.dev` builds are meant to run against a dedicated passkey RP,
+`keys-dev.breez.technology`, so that a debug or preview signing
+cert never appears in the same `assetlinks.json` as production
+users' credentials. See "Android debug signing" above for why
+this matters.
+
+The app-side plumbing is in place; **the dev RP itself is not
+serving yet**, so the wiring is staged and currently resolves to
+the production RP (today's behaviour, nothing changed at runtime).
+
+How it is wired:
+
+- `glow-web` reads `VITE_NATIVE_PASSKEY_RP_ID` at build time
+  (`src/services/passkeyPrfProvider.ts`). Unset or empty falls
+  back to `keys.breez.technology`.
+- `make web-dev` sets that var from `DEV_PASSKEY_RP_ID` in the
+  `Makefile`. That variable is the single flip point.
+- `make android` / `make ios` (both debug, both `.dev`) depend on
+  `web-dev`. The four `.dev` CI jobs (`android`, `ios`,
+  `ios-preview`, `android-preview`) run `make web-dev`; the two
+  release jobs keep plain `make web`.
+
+**Flip checklist**, once `keys-dev.breez.technology` serves both
+well-known files:
+
+1. Set `DEV_PASSKEY_RP_ID ?= keys-dev.breez.technology` in the
+   `Makefile`. That covers local dev and all four CI jobs.
+2. Add `webcredentials:keys-dev.breez.technology` to
+   `ios/App/App/App.entitlements`. Associated Domains accepts
+   multiple entries, so no per-configuration entitlements split is
+   needed: the Release build declares the domain but cannot
+   validate against it, because the dev RP's
+   `apple-app-site-association` lists only `.dev` bundle IDs.
+   Do not add this before the domain resolves.
+3. Confirm the dev RP's `assetlinks.json` lists only `.dev`
+   packages, and that the production RP lists no `.dev` package.
+
+**Existing `.dev` passkeys are abandoned, not migrated.** A
+passkey is cryptographically bound to its RP ID, and the seed is
+derived from a PRF evaluation against that credential, so a
+credential on the new RP derives a *different* seed, i.e. entirely
+separate funds. There is no in-place migration and no way to add one. The
+existing web passkey-migration flow does not apply either; it is
+gated on `!Capacitor.isNativePlatform()`.
+
+This is acceptable because `.dev` builds hold test funds only.
+Anyone with a balance in a `.dev` build should back up the
+recovery phrase and restore it into the new build by hand. Say so
+in the release notes for the preview build that carries the flip.
 
 ## Release signing (Phase 4C)
 
