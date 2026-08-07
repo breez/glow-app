@@ -701,6 +701,12 @@ jobs:
         run: ./scripts/ci/compute-version.sh
 
       - name: Gradle assembleDebug
+        # MINIFY_DEBUG runs R8 over the preview APK with the same rules the
+        # release AAB uses, so a missing keep rule fails on a tester's
+        # device instead of after a Play upload. Still the debug keystore +
+        # `.dev` id, so it installs alongside a store build as before.
+        env:
+          MINIFY_DEBUG: 'true'
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Generate release notes
