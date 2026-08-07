@@ -76,6 +76,24 @@ android {
                 keyPassword keyPasswordEnv
             }
         }
+        // Sideload distribution (Obtainium, Zapstore) ships an APK we
+        // sign ourselves, because Play App Signing keeps its key at
+        // Google and Zapstore's certificate linking needs the keystore.
+        // A distinct certificate from Play means the two installs cannot
+        // replace each other, so this is opt-in per invocation rather
+        // than an env that could silently capture a Play build.
+        sideload {
+            def sideloadPathEnv = System.getenv('SIDELOAD_KEYSTORE_PATH')
+            def sideloadPasswordEnv = System.getenv('SIDELOAD_KEYSTORE_PASSWORD')
+            def sideloadAliasEnv = System.getenv('SIDELOAD_KEY_ALIAS')
+            def sideloadKeyPasswordEnv = System.getenv('SIDELOAD_KEY_PASSWORD')
+            if (sideloadPathEnv && sideloadPasswordEnv && sideloadAliasEnv && sideloadKeyPasswordEnv) {
+                storeFile file(sideloadPathEnv)
+                storePassword sideloadPasswordEnv
+                keyAlias sideloadAliasEnv
+                keyPassword sideloadKeyPasswordEnv
+            }
+        }
     }
     buildTypes {
         debug {
@@ -88,9 +106,23 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Use the env-driven release config when populated,
-            // fall back to debug signing for local smoke builds.
-            signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
+            // `-Psideload` selects the sideload certificate; without it
+            // nothing changes. Fails loudly rather than falling back,
+            // since a sideload APK signed with the upload key would
+            // install fine and then refuse every later update.
+            // Otherwise: env-driven release config when populated, debug
+            // signing for local smoke builds.
+            if (project.hasProperty('sideload')) {
+                if (!signingConfigs.sideload.storeFile) {
+                    throw new GradleException(
+                        '-Psideload requires SIDELOAD_KEYSTORE_PATH, ' +
+                        'SIDELOAD_KEYSTORE_PASSWORD, SIDELOAD_KEY_ALIAS and ' +
+                        'SIDELOAD_KEY_PASSWORD')
+                }
+                signingConfig signingConfigs.sideload
+            } else {
+                signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
+            }
             // R8 raises the cost of decompiling a shipped wallet build.
             // Keep rules live in proguard-rules.pro: the reflective
             // surfaces here (Capacitor's JS bridge, JNA-backed SDK

@@ -723,6 +723,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [warm-sdk-linux]
     timeout-minutes: 45
+    # Above the read-only default: attesting the sideload APK mints a
+    # provenance statement signed by this run's OIDC identity.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     # release-* tag push OR dispatch (target=android|both, distribution=store).
     # dry_run=true verifies the upload pipeline without publishing.
     # `!cancelled()` load-bearing — see `ios` job above.
@@ -762,6 +768,19 @@ jobs:
           set -euo pipefail
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
           echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Decode sideload keystore
+        env:
+          SIDELOAD_KEYSTORE_BASE64: ${{ secrets.SIDELOAD_KEYSTORE_BASE64 }}
+        # Absent secret leaves the path unset, which makes the sideload APK
+        # step below skip rather than sign a shippable artifact with the
+        # wrong key.
+        run: |
+          set -euo pipefail
+          if [ -n "${SIDELOAD_KEYSTORE_BASE64:-}" ]; then
+            printf '%s' "$SIDELOAD_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/sideload.keystore"
+            echo "SIDELOAD_KEYSTORE_PATH=$RUNNER_TEMP/sideload.keystore" >> "$GITHUB_ENV"
+          fi
 
       - name: Write Play service account
         env:
@@ -824,6 +843,21 @@ jobs:
         run: |
           cd android && ./gradlew :app:bundleRelease --no-daemon
 
+      # Sideload distribution (Obtainium, Zapstore). Signed with our own
+      # certificate, not Play's: Play App Signing keeps its key at Google,
+      # and Zapstore's certificate linking needs the keystore. Separate
+      # gradle invocation so the AAB above keeps the upload key.
+      - name: Gradle assembleRelease (sideload APK)
+        if: env.SIDELOAD_KEYSTORE_PATH != ''
+        env:
+          SIDELOAD_KEYSTORE_PASSWORD: ${{ secrets.SIDELOAD_KEYSTORE_PASSWORD }}
+          SIDELOAD_KEY_ALIAS: ${{ secrets.SIDELOAD_KEY_ALIAS }}
+          SIDELOAD_KEY_PASSWORD: ${{ secrets.SIDELOAD_KEY_PASSWORD }}
+        run: |
+          cd android && ./gradlew :app:assembleRelease -Psideload --no-daemon
+          mv app/build/outputs/apk/release/app-release.apk \
+             "app/build/outputs/apk/release/glow-${VERSION_NAME}-sideload.apk"
+
       - name: Publish to Play internal
         # Split from the bundle build so dry_run can skip the upload while
         # still producing the signed AAB artifact below. `dry_run` is a
@@ -868,6 +902,20 @@ jobs:
           # is the branch name and can contain `/`.
           name: glow-${{ env.VERSION_NAME }}-aab
           path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      - name: Attest sideload APK provenance
+        if: env.SIDELOAD_KEYSTORE_PATH != ''
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: android/app/build/outputs/apk/release/glow-${{ env.VERSION_NAME }}-sideload.apk
+
+      - name: Upload sideload APK artifact
+        if: env.SIDELOAD_KEYSTORE_PATH != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: glow-${{ env.VERSION_NAME }}-sideload-apk
+          path: android/app/build/outputs/apk/release/glow-${{ env.VERSION_NAME }}-sideload.apk
           retention-days: 30
 
       - uses: actions/upload-artifact@v7
@@ -1061,6 +1109,7 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             artifacts/**/*.aab
+            artifacts/**/*.apk
             artifacts/**/*.ipa
           prerelease: false
           make_latest: true
