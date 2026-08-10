@@ -2,6 +2,7 @@ package technology.breez.glow.passkeyprf
 
 import android.app.Activity
 import android.util.Base64
+import android.webkit.WebView
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -46,6 +47,25 @@ class PasskeyPlugin : Plugin() {
     @Volatile
     private var rpId: String? = null
 
+    /**
+     * GrapheneOS detection. The OS is fingerprint-resistant (stock-like
+     * Build.* fields, stock user agent), so the WebView provider being
+     * Vanadium is the one reliable native signal. Surfaced as
+     * `isGrapheneOs` on the `checkAvailability()` result so the web layer
+     * can show targeted copy when passkey ceremonies fail there (Google
+     * Password Manager cannot verify the screen lock under sandboxed
+     * Play services and times out).
+     */
+    private val isGrapheneOs: Boolean by lazy {
+        try {
+            WebView.getCurrentWebViewPackage()?.packageName
+                ?.contains("vanadium", ignoreCase = true) == true
+        } catch (e: Exception) {
+            // Detection must never break availability reporting.
+            false
+        }
+    }
+
     @PluginMethod
     fun initialize(call: PluginCall) {
         val rpId = call.getString("rpId")
@@ -72,12 +92,12 @@ class PasskeyPlugin : Plugin() {
     @PluginMethod
     fun checkAvailability(call: PluginCall) {
         val c = client ?: run {
-            call.resolve(JSObject().put("type", "prfUnsupported"))
+            call.resolve(JSObject().put("type", "prfUnsupported").put("isGrapheneOs", isGrapheneOs))
             return
         }
         scope.launch {
             try {
-                call.resolve(encodeAvailability(c.checkAvailability()))
+                call.resolve(encodeAvailability(c.checkAvailability()).put("isGrapheneOs", isGrapheneOs))
             } catch (e: Exception) {
                 call.reject(e.message ?: "checkAvailability failed", errorCode(e))
             }
