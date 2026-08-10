@@ -747,6 +747,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [warm-sdk-linux]
     timeout-minutes: 45
+    # Above the read-only default: attesting the distributable APK mints a
+    # provenance statement signed by this run's OIDC identity.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     # release-* tag push OR dispatch (target=android|both, distribution=store).
     # dry_run=true verifies the upload pipeline without publishing.
     # `!cancelled()` load-bearing — see `ios` job above.
@@ -776,6 +782,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      # Fastlane drives only the universal-APK download below; the build and
+      # the Play upload stay on Gradle.
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: android
 
       - name: Decode release keystore
         env:
@@ -892,6 +906,46 @@ jobs:
           # is the branch name and can contain `/`.
           name: glow-${{ env.VERSION_NAME }}-aab
           path: android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+      # Sideload distribution (Obtainium, Zapstore) ships the universal APK
+      # Play generates from the bundle we just uploaded, rather than a second
+      # build signed by us. It therefore carries the same certificate as the
+      # Play install, so the two can update each other on a device and the
+      # passkey domain files already trust it. Requires the upload to have
+      # happened, hence the dry_run guard.
+      - name: Download Play-signed universal APK
+        if: ${{ !inputs.dry_run }}
+        working-directory: android
+        env:
+          PLAY_PACKAGE_NAME: technology.breez.glow
+          PLAY_VERSION_CODE: ${{ env.VERSION_CODE }}
+          PLAY_APK_DESTINATION: ${{ github.workspace }}/build/glow-${{ env.VERSION_NAME }}.apk
+          # The Play App Signing certificate registered for this package in
+          # the passkey domain files. Pinning it means a key rotation on
+          # Google's side fails the release here, rather than shipping an APK
+          # that installs fine and then cannot sign in.
+          PLAY_EXPECTED_CERT_SHA256: '7A:F9:76:F7:E8:32:DD:5F:AD:CD:AD:9A:40:7D:08:A4:21:28:F2:75:ED:F4:E3:BA:3B:B3:CA:FE:73:CD:89:93'
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/build"
+          bundle exec fastlane download_play_apk
+
+      # Play built and signed this APK, so the provenance statement attests
+      # that this release run produced and published the file, not that it
+      # compiled it. The Play signature is what proves authorship of the code.
+      - name: Attest APK provenance
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: build/glow-${{ env.VERSION_NAME }}.apk
+
+      - name: Upload APK artifact
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: glow-${{ env.VERSION_NAME }}-apk
+          path: build/glow-${{ env.VERSION_NAME }}.apk
           retention-days: 30
 
       - uses: actions/upload-artifact@v7
@@ -1085,6 +1139,7 @@ jobs:
           body_path: RELEASE_NOTES.md
           files: |
             artifacts/**/*.aab
+            artifacts/**/*.apk
             artifacts/**/*.ipa
           prerelease: false
           make_latest: true
