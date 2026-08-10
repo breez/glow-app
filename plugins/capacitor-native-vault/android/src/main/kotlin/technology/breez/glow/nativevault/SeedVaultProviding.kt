@@ -15,72 +15,32 @@ sealed class SeedVaultResult<out T> {
 }
 
 /**
- * Internal trait/interface for biometric-gated seed storage. The plugin
- * class delegates to a concrete provider (currently `KeystoreSeedVault`,
- * which uses Android Keystore + a SharedPreferences-backed ciphertext
- * store).
- *
- * F3 shape: the store/retrieve flows are split into a `prepareX` /
- * `finishX` pair so that the plugin can insert a biometric prompt in
- * the middle (via `BiometricPrompt.CryptoObject`). This is how Android's
- * `setUserAuthenticationRequired(true)` keys work: the key's Cipher
- * cannot run until it's been authenticated against a biometric, and
- * `BiometricPrompt` is the only API that produces an authenticated
- * Cipher.
- *
- * iOS's `KeychainSeedVault` is architecturally simpler because the
- * Keychain `SecAccessControl` handles the biometric prompt inline,
- * so it does NOT need a prepare/finish split. This divergence is
- * intentional — each platform matches its OS-native pattern.
+ * Internal trait/interface for seed storage. The plugin class delegates
+ * to a concrete provider (currently `KeystoreSeedVault`, which uses
+ * Android Keystore + a SharedPreferences-backed ciphertext store).
  */
 interface SeedVaultProviding {
-    // ---- Biometric-bound tier ----
+    // ---- Biometric-bound tier: read-only ----
+    //
+    // Retired. Read and clear only, so a legacy entry can be moved into
+    // the device-only tier. Do not add a store counterpart.
 
-    /** True if a seed blob is currently persisted. Does NOT prompt biometric. */
+    /** True if a legacy bound seed blob is still persisted. Does NOT prompt. */
     fun hasStoredSeed(): Boolean
 
     /**
-     * First half of the store flow: initialize a `Cipher` in ENCRYPT_MODE
-     * against the Keystore key. The returned Cipher must then be wrapped
-     * in a `BiometricPrompt.CryptoObject` and authenticated; only after
-     * `BiometricPrompt.onAuthenticationSucceeded` fires is it legal to
-     * call `finishEncryptAndStore` with that same Cipher.
+     * Read the stored IV and initialize a `Cipher` in DECRYPT_MODE
+     * against the legacy Keystore key with `GCMParameterSpec(iv)`.
      *
-     * This call may generate the AES-GCM key if it doesn't already exist.
-     * Key generation itself does NOT require biometric — only the
-     * `Cipher.init(ENCRYPT_MODE, key)` after generation does.
-     *
-     * Returns `Error(KEY_INVALIDATED)` if the stored key has been wiped
-     * (e.g. new biometric enrollment) and needs to be regenerated. In
-     * that case the caller should retry once.
-     */
-    fun prepareEncryptCipher(): SeedVaultResult<Cipher>
-
-    /**
-     * Second half of the store flow: `cipher.doFinal(seed)` and persist
-     * the resulting ciphertext + IV to SharedPreferences. Requires the
-     * cipher to have been successfully authenticated via BiometricPrompt
-     * since the last `prepareEncryptCipher` call.
-     */
-    fun finishEncryptAndStore(seed: String, cipher: Cipher): SeedVaultResult<Unit>
-
-    /**
-     * First half of the retrieve flow: read the stored IV from
-     * SharedPreferences and initialize a `Cipher` in DECRYPT_MODE
-     * against the Keystore key with `GCMParameterSpec(iv)`. The
-     * returned Cipher must then be wrapped in a
-     * `BiometricPrompt.CryptoObject` and authenticated before
-     * `finishDecrypt` is called.
-     *
-     * Returns `NotFound` if there's no persisted ciphertext or IV.
+     * Returns `NotFound` if there's no persisted ciphertext or IV, and
+     * `Error(USER_NOT_AUTHENTICATED)` if the key's auth window has
+     * lapsed.
      */
     fun prepareDecryptCipher(): SeedVaultResult<Cipher>
 
     /**
-     * Second half of the retrieve flow: `cipher.doFinal(ciphertext)`
-     * and decode the plaintext as UTF-8. Requires the cipher to have
-     * been successfully authenticated via BiometricPrompt since the
-     * last `prepareDecryptCipher` call.
+     * `cipher.doFinal(ciphertext)` and decode the plaintext as UTF-8,
+     * using the Cipher from the matching `prepareDecryptCipher` call.
      */
     fun finishDecrypt(cipher: Cipher): SeedVaultResult<String>
 
@@ -89,12 +49,9 @@ interface SeedVaultProviding {
 
     // ---- Device-only tier (encrypted at rest, no biometric gate) ----
     //
-    // Used by non-passkey users who opted out of the biometric flow during
-    // onboarding. The AES-GCM key for this tier is NOT marked
-    // `setUserAuthenticationRequired(true)`, so `Cipher.init` +
-    // `cipher.doFinal` run in a single step without a
-    // `BiometricPrompt.CryptoObject` dance. No prepare/finish split
-    // because there's no biometric mid-flow.
+    // The shipped default for every seed. App lock (PIN / biometric /
+    // auto-lock) gates the UI from JS instead; see appLock.ts. The key
+    // is not auth-bound, so encrypt and decrypt run in a single step.
 
     /** True if a device-only seed blob is currently persisted. Does NOT prompt. */
     fun hasStoredSeedDeviceOnly(): Boolean

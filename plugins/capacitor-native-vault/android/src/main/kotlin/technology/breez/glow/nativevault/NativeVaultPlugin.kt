@@ -1,5 +1,6 @@
 package technology.breez.glow.nativevault
 
+import android.os.Build
 import androidx.fragment.app.FragmentActivity
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -9,30 +10,15 @@ import com.getcapacitor.annotation.CapacitorPlugin
 import javax.crypto.Cipher
 
 /**
- * Capacitor plugin entry point for `NativeVault`. Exposes five methods to
- * JS (`checkBiometry`, `hasStoredSeed`, `storeSeed`, `retrieveSeed`,
- * `clearSeed`) and delegates each one to a dedicated provider:
+ * Capacitor plugin entry point for `NativeVault`. Delegates to a
+ * dedicated provider per concern:
  *
  *   - `BiometricAuthProviding` for the biometric prompt
  *   - `SeedVaultProviding` for the actual Keystore + ciphertext store
  *
- * Splitting the work across interface-conforming providers (instead of
- * stuffing everything into the plugin class) keeps each concern testable
- * in isolation.
- *
- * F3 flow shape: `storeSeed` and `retrieveSeed` each orchestrate a
- * three-step dance because the Keystore key is marked
- * `setUserAuthenticationRequired(true)` and cannot be used until a
- * biometric has authorized a specific `Cipher` via
- * `BiometricPrompt.CryptoObject`:
- *
- *   1. `vault.prepareEncryptCipher()` / `vault.prepareDecryptCipher()`
- *      returns an initialized-but-unauthenticated Cipher.
- *   2. `biometric.authenticateWithCrypto(cipher)` shows the biometric
- *      prompt with that Cipher wrapped in a CryptoObject.
- *   3. On success, `vault.finishEncryptAndStore` / `vault.finishDecrypt`
- *      runs the single `doFinal` call against the now-authorized
- *      Cipher and persists / returns the result.
+ * `*SeedDeviceOnly` is the shipped tier. `hasStoredSeed` /
+ * `retrieveSeed` / `clearSeed` are the retired biometric-bound tier,
+ * read-only; see `SeedVaultProviding`.
  */
 @CapacitorPlugin(name = "NativeVault")
 class NativeVaultPlugin : Plugin() {
@@ -102,95 +88,9 @@ class NativeVaultPlugin : Plugin() {
     }
 
     @PluginMethod
-    fun storeSeed(call: PluginCall) {
-        val seed = call.getString("seed")
-        if (seed == null) {
-            call.reject("Missing required parameter: seed", NativeVaultErrorCode.UNKNOWN.code)
-            return
-        }
-
-        val hostActivity = activity as? FragmentActivity
-        if (hostActivity == null) {
-            call.reject(
-                "Plugin host activity is not a FragmentActivity",
-                NativeVaultErrorCode.UNKNOWN.code,
-            )
-            return
-        }
-
-        // Fast path: try cipher.init + doFinal. Succeeds when a recent
-        // BIOMETRIC_STRONG auth (e.g. the WebAuthn ceremony that
-        // chained into onboarding) covers the key's grace window.
-        // For time-based-auth keys, init itself can throw
-        // UserNotAuthenticatedException; either prepare or finish may
-        // surface it.
-        when (val prepared = vault.prepareEncryptCipher()) {
-            is SeedVaultResult.Ok -> {
-                when (val fast = vault.finishEncryptAndStore(seed, prepared.value)) {
-                    is SeedVaultResult.Ok -> {
-                        call.resolve()
-                        return
-                    }
-                    is SeedVaultResult.Error -> {
-                        if (fast.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
-                            call.reject(fast.message, fast.code.code)
-                            return
-                        }
-                        // Fall through to the prompt path below.
-                    }
-                    is SeedVaultResult.NotFound -> {
-                        call.reject(
-                            "Seed vault returned NotFound on finishEncryptAndStore",
-                            NativeVaultErrorCode.UNKNOWN.code,
-                        )
-                        return
-                    }
-                }
-            }
-            is SeedVaultResult.NotFound -> {
-                call.reject(
-                    "Seed vault returned NotFound on prepareEncryptCipher",
-                    NativeVaultErrorCode.UNKNOWN.code,
-                )
-                return
-            }
-            is SeedVaultResult.Error -> {
-                if (prepared.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
-                    call.reject(prepared.message, prepared.code.code)
-                    return
-                }
-                // Fall through to the prompt path below.
-            }
-        }
-
-        // Slow path: prompt without CryptoObject (the canonical pattern
-        // for time-based-auth keys), then retry the fast path with a
-        // fresh cipher. The successful prompt seeds the Keystore's
-        // auth state for the next [KEY_AUTH_GRACE_SECONDS] seconds.
-        biometric.authenticate(
-            activity = hostActivity,
-            title = "Protect Glow",
-            subtitle = "Use your biometric credential to enable quick wallet unlock",
-            cancelLabel = "Cancel",
-            onSuccess = {
-                when (val rePrepared = vault.prepareEncryptCipher()) {
-                    is SeedVaultResult.Ok -> completeStoreAfterAuth(call, seed, rePrepared.value)
-                    is SeedVaultResult.NotFound -> call.reject(
-                        "Seed vault returned NotFound on prepareEncryptCipher",
-                        NativeVaultErrorCode.UNKNOWN.code,
-                    )
-                    is SeedVaultResult.Error -> call.reject(rePrepared.message, rePrepared.code.code)
-                }
-            },
-            onFailure = { code, message -> call.reject(message, code.code) },
-        )
-    }
-
-    @PluginMethod
     fun retrieveSeed(call: PluginCall) {
-        // 1. Pre-flight: if no entry exists, fail fast with NO_STORED_SEED
-        //    *before* showing a biometric prompt. Otherwise the user would
-        //    authenticate just to be told "nothing stored".
+        // Fail fast before prompting: authenticating only to be told
+        // "nothing stored" is worse than no prompt at all.
         if (!vault.hasStoredSeed()) {
             call.reject(
                 "No seed is currently persisted in secure storage.",
@@ -199,10 +99,8 @@ class NativeVaultPlugin : Plugin() {
             return
         }
 
-        // 2. Resolve the host activity for BiometricPrompt. Capacitor's
-        //    bridge activity extends AppCompatActivity, which itself
-        //    extends FragmentActivity, so this cast always succeeds in
-        //    practice. Defensively bail with UNKNOWN if it doesn't.
+        // Capacitor's bridge activity extends AppCompatActivity, which
+        // extends FragmentActivity, so this cast succeeds in practice.
         val hostActivity = activity as? FragmentActivity
         if (hostActivity == null) {
             call.reject(
@@ -212,65 +110,28 @@ class NativeVaultPlugin : Plugin() {
             return
         }
 
-        // Fast path: try cipher.init + doFinal. Either prepare or
-        // finish may surface UserNotAuthenticatedException with a
-        // time-based-auth key; both routes fall through to the prompt.
-        when (val prepared = vault.prepareDecryptCipher()) {
-            is SeedVaultResult.Ok -> {
-                when (val fast = vault.finishDecrypt(prepared.value)) {
-                    is SeedVaultResult.Ok -> {
-                        val ret = JSObject().apply { put("seed", fast.value) }
-                        call.resolve(ret)
-                        return
-                    }
-                    is SeedVaultResult.Error -> {
-                        if (fast.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
-                            call.reject(fast.message, fast.code.code)
-                            return
-                        }
-                        // Fall through to the prompt path below.
-                    }
-                    is SeedVaultResult.NotFound -> {
-                        call.reject(
-                            "No seed is currently persisted in secure storage.",
-                            NativeVaultErrorCode.NO_STORED_SEED.code,
-                        )
-                        return
-                    }
-                }
-            }
-            is SeedVaultResult.NotFound -> {
-                call.reject(
-                    "No seed is currently persisted in secure storage.",
-                    NativeVaultErrorCode.NO_STORED_SEED.code,
-                )
-                return
-            }
-            is SeedVaultResult.Error -> {
-                if (prepared.code != NativeVaultErrorCode.USER_NOT_AUTHENTICATED) {
-                    call.reject(prepared.message, prepared.code.code)
-                    return
-                }
-                // Fall through to the prompt path below.
-            }
-        }
-
-        // Slow path: prompt without CryptoObject (the canonical pattern
-        // for time-based-auth keys), then retry the fast path with a
-        // fresh cipher.
+        // Prompt before every decrypt, with no attempt-first fast path:
+        // this tier's key authorizes on a time basis, so it will not
+        // require a prompt itself.
+        //
+        // Below API 30 that key accepts any device unlock, biometric or
+        // not, so accept a device credential too. A biometric-only
+        // prompt would leave an Android 9/10 user who has a PIN but no
+        // fingerprint unable to read their seed.
         biometric.authenticate(
             activity = hostActivity,
             title = "Unlock Glow",
-            subtitle = "Use your biometric credential to access your wallet",
+            subtitle = "Confirm it's you to continue",
             cancelLabel = "Cancel",
+            allowDeviceCredential = Build.VERSION.SDK_INT < Build.VERSION_CODES.R,
             onSuccess = {
-                when (val rePrepared = vault.prepareDecryptCipher()) {
-                    is SeedVaultResult.Ok -> completeRetrieveAfterAuth(call, rePrepared.value)
+                when (val prepared = vault.prepareDecryptCipher()) {
+                    is SeedVaultResult.Ok -> completeRetrieveAfterAuth(call, prepared.value)
                     is SeedVaultResult.NotFound -> call.reject(
                         "No seed is currently persisted in secure storage.",
                         NativeVaultErrorCode.NO_STORED_SEED.code,
                     )
-                    is SeedVaultResult.Error -> call.reject(rePrepared.message, rePrepared.code.code)
+                    is SeedVaultResult.Error -> call.reject(prepared.message, prepared.code.code)
                 }
             },
             onFailure = { code, message -> call.reject(message, code.code) },
@@ -336,28 +197,8 @@ class NativeVaultPlugin : Plugin() {
     // MARK: - Internal
 
     /**
-     * F3 step 3 for the store flow: runs after biometric auth has
-     * authorized the Cipher. Encrypts the seed into that Cipher and
-     * persists the ciphertext + IV.
-     */
-    private fun completeStoreAfterAuth(call: PluginCall, seed: String, cipher: Cipher) {
-        when (val result = vault.finishEncryptAndStore(seed, cipher)) {
-            is SeedVaultResult.Ok -> call.resolve()
-            is SeedVaultResult.NotFound -> {
-                // Non-sensical for a write; treat as unknown.
-                call.reject(
-                    "Seed vault returned NotFound on finishEncryptAndStore",
-                    NativeVaultErrorCode.UNKNOWN.code,
-                )
-            }
-            is SeedVaultResult.Error -> call.reject(result.message, result.code.code)
-        }
-    }
-
-    /**
-     * F3 step 3 for the retrieve flow: runs after biometric auth has
-     * authorized the Cipher. Decrypts the stored ciphertext with the
-     * now-authenticated Cipher and resolves the outstanding PluginCall.
+     * Runs after the user has just authenticated. Decrypts the stored
+     * ciphertext and resolves the outstanding PluginCall.
      */
     private fun completeRetrieveAfterAuth(call: PluginCall, cipher: Cipher) {
         when (val result = vault.finishDecrypt(cipher)) {
