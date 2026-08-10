@@ -25,16 +25,19 @@ set -euo pipefail
 
 CURRENT="${GITHUB_REF_NAME:-HEAD}"
 
-# Prefer the annotated-tag message when invoked on a release-* tag
-# context AND the tag has a non-empty annotation body. Lets a
-# maintainer push hand-curated notes via:
+# Prefer the annotated-tag message when invoked on a tag we distribute
+# from AND the tag has a non-empty annotation body. Lets a maintainer
+# push hand-curated notes via:
 #   git tag -a release-X.Y.Z -m "What's new since X.Y.W
 #
 #   * Bullet 1
 #   * Bullet 2"
+# preview-* and rc-* are included because those go to testers through
+# Firebase App Distribution, where raw commit subjects are the wrong
+# register for the audience just as they are on a store listing.
 # Strips a leading PGP signature block if the tag is signed, and
 # trims trailing whitespace.
-if [[ "$CURRENT" == release-* ]] \
+if [[ "$CURRENT" == release-* || "$CURRENT" == preview-* || "$CURRENT" == rc-* ]] \
    && [[ "$(git cat-file -t "$CURRENT" 2>/dev/null || true)" == "tag" ]]; then
   # Annotated tag: %(contents) returns the user-supplied message.
   # (For lightweight tags it would fall through to the tagged commit's
