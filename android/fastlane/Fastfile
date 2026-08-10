@@ -55,4 +55,42 @@ platform :android do
   ensure
     FileUtils.rm_rf(sa_dir) if defined?(sa_dir) && sa_dir
   end
+
+  # Sideload distribution (Obtainium, Zapstore) ships the universal APK Play
+  # generates from the uploaded bundle, so it carries the same certificate as
+  # the Play install rather than one of our own.
+  #
+  # Expected env vars:
+  #   PLAY_PACKAGE_NAME              — applicationId of the release build
+  #   PLAY_VERSION_CODE              — versionCode that was just published
+  #   PLAY_APK_DESTINATION           — absolute path to write, must end .apk
+  #   PLAY_SERVICE_ACCOUNT_JSON_PATH — path to the Play service account key
+  #   PLAY_EXPECTED_CERT_SHA256      — signing certificate to require
+  desc "Download the Play-signed universal APK for sideload distribution"
+  lane :download_play_apk do
+    cert_sha = ENV["PLAY_EXPECTED_CERT_SHA256"].to_s
+    cert_sha = nil if cert_sha.empty?
+
+    # Play generates the universal APK asynchronously, so the API reports
+    # nothing for a while right after the upload. Retry rather than fail the
+    # release on a race we expect to lose the first time. A certificate
+    # mismatch is not a race, so it re-raises immediately.
+    attempt = 0
+    begin
+      attempt += 1
+      download_universal_apk_from_google_play(
+        package_name: ENV.fetch("PLAY_PACKAGE_NAME"),
+        version_code: ENV.fetch("PLAY_VERSION_CODE").to_i,
+        destination: ENV.fetch("PLAY_APK_DESTINATION"),
+        json_key: ENV.fetch("PLAY_SERVICE_ACCOUNT_JSON_PATH"),
+        certificate_sha256_hash: cert_sha,
+      )
+    rescue StandardError => e
+      raise if attempt >= 10 || e.message.include?("certificate_sha256_hash")
+
+      UI.important("Universal APK not available yet (attempt #{attempt}/10): #{e.message}")
+      sleep(30)
+      retry
+    end
+  end
 end
