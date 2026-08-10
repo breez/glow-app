@@ -392,10 +392,17 @@ Consequences:
   re-validating the `patches/` files silently breaks keyboard
   handling.
 
-A CodeQL code-scanning workflow is intentionally NOT shipped —
-CodeQL on private repos requires GitHub Advanced Security
-(GHAS), which isn't included in Breez-org's plan tier. Revisit
-if GHAS becomes available.
+`.github/workflows/codeql.yml` runs code scanning over the
+`java-kotlin` and `swift` sources. Both need a real build, so the
+jobs mirror ci.yml's `android` and `ios` build steps and restore
+the same SDK cache in consumer mode. Keep the three copies of
+that sequence in step when the build changes. Triggers follow
+ci.yml's runner-cost model; see the workflow.
+
+Coverage gaps and scheduling are deliberately not enumerated
+here: this file is public. Read the workflow for the current
+shape, and keep notes about what is *not* covered in the private
+tracker rather than in the repo.
 
 ### Shared setup: composite action
 
