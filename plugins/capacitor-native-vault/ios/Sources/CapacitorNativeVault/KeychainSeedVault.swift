@@ -63,9 +63,10 @@ final class KeychainSeedVault: SeedVaultProviding {
     }
 
     func storeSeed(_ seed: String) -> SeedVaultResult<Void> {
-        guard let data = seed.data(using: .utf8) else {
+        guard var data = seed.data(using: .utf8) else {
             return .error(.unknown, "Failed to encode seed payload as UTF-8")
         }
+        defer { data.zeroize() }
 
         guard let accessControl = makeAccessControl() else {
             return .error(.unknown, "Failed to create SecAccessControl for Keychain item")
@@ -153,9 +154,10 @@ final class KeychainSeedVault: SeedVaultProviding {
         if status != errSecSuccess {
             return .error(mapKeychainStatus(status), "Keychain SecItemCopyMatching failed (status \(status))")
         }
-        guard let data = item as? Data else {
+        guard var data = item as? Data else {
             return .error(.keyInvalidated, "Keychain returned an unexpected payload type")
         }
+        defer { data.zeroize() }
         guard let seed = String(data: data, encoding: .utf8) else {
             return .error(.keyInvalidated, "Stored seed payload is not valid UTF-8")
         }
@@ -186,9 +188,10 @@ final class KeychainSeedVault: SeedVaultProviding {
     }
 
     func storeSeedDeviceOnly(_ seed: String) -> SeedVaultResult<Void> {
-        guard let data = seed.data(using: .utf8) else {
+        guard var data = seed.data(using: .utf8) else {
             return .error(.unknown, "Failed to encode seed payload as UTF-8")
         }
+        defer { data.zeroize() }
 
         // Overwrite-on-store semantics: delete any existing entry first,
         // then add. Consistent with the biometric-bound path and avoids
@@ -235,9 +238,10 @@ final class KeychainSeedVault: SeedVaultProviding {
                 "Keychain SecItemCopyMatching (device-only) failed (status \(status))"
             )
         }
-        guard let data = item as? Data else {
+        guard var data = item as? Data else {
             return .error(.keyInvalidated, "Keychain returned an unexpected payload type")
         }
+        defer { data.zeroize() }
         guard let seed = String(data: data, encoding: .utf8) else {
             return .error(.keyInvalidated, "Stored seed payload is not valid UTF-8")
         }
@@ -295,6 +299,23 @@ final class KeychainSeedVault: SeedVaultProviding {
 /// `LocalAuthBiometricAuth.swift`'s file-private helper) so
 /// `KeychainSeedVault` can do its own pre-flight biometric probe
 /// without coupling the two implementations together.
+private extension Data {
+    /// Overwrite these bytes so the buffer does not outlive the operation.
+    ///
+    /// Best-effort by nature: `Data` is copy-on-write, so a buffer still
+    /// shared with someone else (a Keychain result bridged from CFData)
+    /// gets copied and we clear only our copy. Buffers we build ourselves
+    /// are uniquely referenced and really are cleared. `memset_s` because
+    /// a plain memset on a dying buffer is a legal thing to optimise away.
+    mutating func zeroize() {
+        guard !isEmpty else { return }
+        withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            memset_s(base, raw.count, 0, raw.count)
+        }
+    }
+}
+
 private func mapLAPolicyError(_ error: NSError?) -> NativeVaultErrorCode {
     guard let nsError = error, nsError.domain == LAErrorDomain else {
         return .biometricUnavailable
