@@ -1,0 +1,163 @@
+name: CodeQL
+
+# Code scanning for the Kotlin, Java and Swift sources.
+#
+# Both analysed languages need a real build first, which is why this is
+# a workflow rather than GitHub's default setup: the jobs reuse ci.yml's
+# `android` and `ios` build steps and restore the same SDK artifact
+# cache in consumer mode, where a miss fails loudly at the build step.
+# Keep the three copies of that build sequence in step.
+#
+# Runner mix follows ci.yml's: Linux where it can, macOS only where the
+# toolchain requires it.
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'plugins/**'
+      - '.github/workflows/codeql.yml'
+  schedule:
+    # Mondays, after cache-maintenance's Monday keep-alive touches the
+    # SDK caches. Off the hour to dodge the scheduler stampede.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  java-kotlin:
+    name: Analyze (java-kotlin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,android
+
+      - name: Setup JDK 21 (Capacitor 8 + AGP 8)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # Falls back to an unencrypted shared cache when the secret is unset.
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          # manual, not autobuild: Gradle cannot configure until the web
+          # bundle exists and `cap sync` has generated the Capacitor
+          # module wiring, so autobuild would invoke Gradle too early.
+          # build-mode: none does not analyse Kotlin, so it is not an
+          # option here either.
+          build-mode: manual
+
+      # Build steps mirror ci.yml's `android` job. Keep them in step.
+      - name: Build glow-web dist/
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web-dev
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (Android)
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        # No compute-version.sh: versionCode / versionName fall back to
+        # defaults in build.gradle, and nothing here ships an artifact.
+        run: cd android && ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java-kotlin
+
+  swift:
+    name: Analyze (swift)
+    runs-on: macos-15
+    timeout-minutes: 60
+    # Mirrors the opt-in model ci.yml uses for its macOS jobs.
+    if: github.event_name != 'pull_request'
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - uses: ./.github/actions/setup-glow-app
+        with:
+          platforms: wasm,ios
+
+      - name: Select Xcode
+        # Pin Xcode so GitHub's default rotation can't invalidate caches.
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+
+      # Build steps mirror ci.yml's `ios` job. Keep them in step.
+      - name: Build glow-web dist/
+        env:
+          VITE_BREEZ_API_KEY: ${{ secrets.VITE_BREEZ_API_KEY }}
+        run: make web-dev
+
+      - name: Install glow-app deps (applies patch-package patches)
+        run: npm ci
+
+      - name: Capacitor sync (iOS)
+        run: npx cap sync ios
+
+      - name: xcodebuild (unsigned device build)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -destination 'generic/platform=iOS' \
+            -configuration Debug \
+            -allowProvisioningUpdates=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build | tee xcodebuild.log
+
+      - name: Upload xcodebuild log on failure
+        uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: codeql-ios-build-log
+          path: xcodebuild.log
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
