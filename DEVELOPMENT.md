@@ -178,7 +178,7 @@ make deploy-android   # build + install on connected Android device
 
 - **Bundle ID**: `technology.breez.glow` (release → TestFlight / App Store), `technology.breez.glow.dev` (debug). Per-configuration split in `ios/App/App.xcodeproj/project.pbxproj` (Debug config → `.dev`, Release config → `.glow`).
 - **Entitlements**: `webcredentials:keys.breez.technology` (Associated Domains). The `.dev` bundle ID moves to the dev RP: see "Passkey relying party (RP) split".
-- **Minimum deployment**: iOS 15 (passkey PRF requires iOS 18+, graceful fallback on older)
+- **Minimum deployment**: iOS 18 (passkey PRF requires it, and the App Store must not offer the app where the primary onboarding path cannot run). The plugin keeps its `@available(iOS 18.0, *)` guards so it stays consumable by iOS 15 hosts if it is ever published standalone.
 - **AASA caching**: Apple caches `apple-app-site-association` aggressively. If passkeys fail on a new bundle ID, go to Settings → Developer → Associated Domains Development → toggle to force refresh.
 
 ### Android
