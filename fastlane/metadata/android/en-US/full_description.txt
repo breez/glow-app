@@ -1,0 +1,17 @@
+Glow is a self-custodial Bitcoin app built on the Lightning Network. Payments settle in seconds, and the keys stay on your device.
+
+Sign in with a passkey. Glow derives your keys from a passkey held by your device or your password manager, so there is nothing to write down before you can start. Prefer a recovery phrase? You can restore with one at any time.
+
+What you can do:
+
+* Send and receive over Lightning in seconds
+* Receive on-chain bitcoin and have it brought in for you
+* Pay Lightning addresses, invoices, and QR codes
+* Keep the people you pay often as contacts
+* Hold part of your balance at a stable value
+* Buy bitcoin through built-in providers
+* Lock Glow behind a PIN, your fingerprint, or your face
+
+Your keys never leave your device. Glow cannot hold your funds, freeze them, or reverse a payment you have made.
+
+Built by Breez on the Breez Spark SDK.
