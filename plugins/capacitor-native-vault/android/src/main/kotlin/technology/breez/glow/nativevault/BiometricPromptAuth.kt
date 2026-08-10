@@ -6,25 +6,12 @@ import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
-import javax.crypto.Cipher
 
 /**
  * `BiometricAuthProviding` implementation backed by `androidx.biometric.BiometricPrompt`.
  *
- * F3 introduces [authenticateWithCrypto], which wraps a pre-initialized
- * `Cipher` in a `BiometricPrompt.CryptoObject` and passes it to
- * `prompt.authenticate`. On successful biometric auth, the callback
- * receives a CryptoObject whose underlying Cipher is authorized for
- * exactly one cryptographic operation (one `doFinal` call). This is
- * how Android binds a biometric auth to a specific Keystore key
- * operation — without it, any cryptographic call against a
- * `setUserAuthenticationRequired(true)` key throws
- * `UserNotAuthenticatedException`.
- *
- * The legacy [authenticate] method (no crypto object) is kept for
- * protocol conformance but is not called by `NativeVaultPlugin` in
- * the F3 world — every store/retrieve goes through
- * [authenticateWithCrypto] instead.
+ * Prompt only: proves a human is present, does not authorize a specific
+ * Keystore operation.
  */
 class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding {
 
@@ -76,80 +63,39 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
         title: String,
         subtitle: String,
         cancelLabel: String,
+        allowDeviceCredential: Boolean,
         onSuccess: () -> Unit,
-        onFailure: (NativeVaultErrorCode, String) -> Unit,
-    ) {
-        runAuthenticate(
-            activity = activity,
-            title = title,
-            subtitle = subtitle,
-            cancelLabel = cancelLabel,
-            cryptoObject = null,
-            onSuccess = { _ -> onSuccess() },
-            onFailure = onFailure,
-        )
-    }
-
-    override fun authenticateWithCrypto(
-        activity: FragmentActivity,
-        cipher: Cipher,
-        title: String,
-        subtitle: String,
-        cancelLabel: String,
-        onSuccess: (Cipher) -> Unit,
-        onFailure: (NativeVaultErrorCode, String) -> Unit,
-    ) {
-        runAuthenticate(
-            activity = activity,
-            title = title,
-            subtitle = subtitle,
-            cancelLabel = cancelLabel,
-            cryptoObject = BiometricPrompt.CryptoObject(cipher),
-            onSuccess = { result ->
-                // F3: the callback's CryptoObject wraps the same Cipher
-                // we passed in, but it's now authorized for a single
-                // crypto operation. We prefer the post-auth Cipher the
-                // callback hands us (it's guaranteed to be the
-                // authenticated one); fall back to the input Cipher if
-                // the callback doesn't populate it (shouldn't happen in
-                // practice with a crypto-bound prompt).
-                val authenticatedCipher = result?.cryptoObject?.cipher ?: cipher
-                onSuccess(authenticatedCipher)
-            },
-            onFailure = onFailure,
-        )
-    }
-
-    private fun runAuthenticate(
-        activity: FragmentActivity,
-        title: String,
-        subtitle: String,
-        cancelLabel: String,
-        cryptoObject: BiometricPrompt.CryptoObject?,
-        onSuccess: (BiometricPrompt.AuthenticationResult?) -> Unit,
         onFailure: (NativeVaultErrorCode, String) -> Unit,
     ) {
         // Pre-flight: surface BIOMETRIC_NOT_ENROLLED / BIOMETRIC_UNAVAILABLE
         // before showing a prompt that would just fail anyway.
-        val manager = BiometricManager.from(context)
-        when (manager.canAuthenticate(BIOMETRIC_AUTHENTICATORS)) {
-            BiometricManager.BIOMETRIC_SUCCESS -> {
-                // ok, continue
-            }
-            BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
-            BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE,
-            BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED,
-            BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> {
-                onFailure(NativeVaultErrorCode.BIOMETRIC_UNAVAILABLE, "Biometric hardware unavailable")
-                return
-            }
-            BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
-                onFailure(NativeVaultErrorCode.BIOMETRIC_NOT_ENROLLED, "No biometric credential enrolled")
-                return
-            }
-            else -> {
-                onFailure(NativeVaultErrorCode.UNKNOWN, "Unknown biometric capability state")
-                return
+        //
+        // Skipped when a device credential is acceptable: `canAuthenticate`
+        // only accepts DEVICE_CREDENTIAL from API 30 up, so below that the
+        // biometric-only status would reject a user who has a PIN but no
+        // fingerprint. Let BiometricPrompt report its own errors instead;
+        // `mapBiometricError` covers them.
+        if (!allowDeviceCredential) {
+            val manager = BiometricManager.from(context)
+            when (manager.canAuthenticate(BIOMETRIC_AUTHENTICATORS)) {
+                BiometricManager.BIOMETRIC_SUCCESS -> {
+                    // ok, continue
+                }
+                BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE,
+                BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE,
+                BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED,
+                BiometricManager.BIOMETRIC_ERROR_UNSUPPORTED -> {
+                    onFailure(NativeVaultErrorCode.BIOMETRIC_UNAVAILABLE, "Biometric hardware unavailable")
+                    return
+                }
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> {
+                    onFailure(NativeVaultErrorCode.BIOMETRIC_NOT_ENROLLED, "No biometric credential enrolled")
+                    return
+                }
+                else -> {
+                    onFailure(NativeVaultErrorCode.UNKNOWN, "Unknown biometric capability state")
+                    return
+                }
             }
         }
 
@@ -189,7 +135,7 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
                 executor,
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        onSuccess(result)
+                        onSuccess()
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
@@ -207,9 +153,22 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
             val info = BiometricPrompt.PromptInfo.Builder()
                 .setTitle(title)
                 .setSubtitle(subtitle)
-                .setNegativeButtonText(cancelLabel)
-                .setAllowedAuthenticators(BIOMETRIC_AUTHENTICATORS)
                 .setConfirmationRequired(false)
+                .apply {
+                    if (allowDeviceCredential) {
+                        // setDeviceCredentialAllowed is deprecated in favour
+                        // of setAllowedAuthenticators(... or DEVICE_CREDENTIAL),
+                        // but that combination is unsupported on API 28-29 —
+                        // the only versions that reach this branch. A negative
+                        // button is illegal alongside a credential fallback,
+                        // so it is deliberately not set here.
+                        @Suppress("DEPRECATION")
+                        setDeviceCredentialAllowed(true)
+                    } else {
+                        setNegativeButtonText(cancelLabel)
+                        setAllowedAuthenticators(BIOMETRIC_AUTHENTICATORS)
+                    }
+                }
                 .build()
 
             // Belt-and-braces: the activity could still transition to
@@ -217,11 +176,7 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
             // authenticate call below. Catch the resulting
             // IllegalStateException so the JS Promise always resolves.
             try {
-                if (cryptoObject != null) {
-                    prompt.authenticate(info, cryptoObject)
-                } else {
-                    prompt.authenticate(info)
-                }
+                prompt.authenticate(info)
             } catch (e: IllegalStateException) {
                 onFailure(
                     NativeVaultErrorCode.USER_CANCELLED,
@@ -237,17 +192,16 @@ class BiometricPromptAuth(private val context: Context) : BiometricAuthProviding
     }
 
     companion object {
-        // Allow the strongest biometric class available on the device. We
-        // do NOT include DEVICE_CREDENTIAL here because falling back to a
-        // PIN/pattern on biometric failure would defeat the "biometric
-        // unlock" UX promise — the caller should fall through to the
-        // legacy passkey or mnemonic restore flow instead.
+        // Strongest biometric class only. DEVICE_CREDENTIAL is excluded
+        // because falling back to a PIN on biometric failure would defeat
+        // the "biometric unlock" promise; the `allowDeviceCredential`
+        // branch above bypasses this constant when a credential is
+        // acceptable.
         //
-        // F3 also needs BIOMETRIC_STRONG specifically because the
-        // Keystore key is generated with `AUTH_BIOMETRIC_STRONG`; if
-        // the allowed authenticators here didn't match, the prompt
-        // would still show but the authenticated Cipher wouldn't be
-        // usable and `doFinal` would throw.
+        // BIOMETRIC_STRONG specifically, because a legacy bound key on
+        // API 30+ was generated with `AUTH_BIOMETRIC_STRONG`: a weaker
+        // authenticator would satisfy the prompt but not the key, and
+        // the decrypt right after would throw.
         private const val BIOMETRIC_AUTHENTICATORS = BiometricManager.Authenticators.BIOMETRIC_STRONG
     }
 }

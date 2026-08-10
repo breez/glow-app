@@ -37,37 +37,44 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for full setup guide including SDK build pr
   - Android: Kotlin, wraps SDK's `technology.breez.spark.passkey.PasskeyProvider` (CredentialManager + PRF extension)
   - Native-only — no web fallback; on web, glow-web uses the SDK's `PasskeyProvider` from `@breeztech/breez-sdk-spark/passkey-prf-provider` directly.
 - Integration with glow-web via the SDK's `PrfProvider` interface — runtime detection swaps native vs. browser provider
-- `plugins/capacitor-native-vault/` — Local Capacitor plugin for biometric-bound seed storage
+- `plugins/capacitor-native-vault/` — Local Capacitor plugin for seed storage
+  - Ships the device-only tier (encrypted at rest, no auth binding). The
+    biometric-bound tier is retired and read-only on Android; see
+    "Phase 3" below.
   - iOS: Swift, Keychain `SecAccessControl` with `.biometryCurrentSet`
-  - Android: Kotlin, Keystore AES-GCM with `setUserAuthenticationRequired(true)` + `BiometricPrompt.CryptoObject`
+  - Android: Kotlin, Keystore AES-GCM
   - See "Phase 3: Native Secure Seed Storage" below for the full architecture
 
 ## Phase 3: Native Secure Seed Storage
 
 Stores the wallet seed in iOS Keychain / Android Keystore, replacing the plaintext localStorage mnemonic path and the per-launch passkey PRF roundtrip on native. On web the abstraction is a no-op — the existing localStorage / passkey re-derive flow runs unchanged.
 
-**App lock is opt-in, Misty Breez-style** (glow-web `feat/optional-biometric-unlock`, July 2026, per Roy's "no login by default" decision): the seed always lives in the vault's device-only tier (encrypted at rest, no auth binding) and launch connects silently, like the PWA. A dedicated Security page (SideMenu, native only) offers an opt-in 6-digit PIN, and on top of it an optional biometric gate plus an auto-lock timeout (glow-web `services/appLock.ts`, `hooks/useAppLock.ts`, `pages/SecurityPage.tsx`, `components/LockScreen.tsx` + the plugin's standalone `authenticate()`). PIN/biometrics gate the UI only — deliberately NOT crypto binding, because a biometric-bound seed could never be released by a PIN fallback. The biometric-bound tier and its startup unlock flow (UnlockingPage / UnlockPage, `native-unlocking` / `native-locked`) survive only as a legacy migration path: pre-app-lock installs unlock once via the OS prompt, then the seed moves to the device-only tier. The F3 sections below describe that legacy bound tier.
-
-The original Phase 3 PR (#2) used the `@aparajita/capacitor-secure-storage` and `@aparajita/capacitor-biometric-auth` packages. The current state on the `feat/native-secure-storage-followups` branch replaces those with an in-house `capacitor-native-vault` plugin and adds biometric-binding at the cryptographic layer (F2 + F3 follow-ups).
+**App lock is opt-in, Misty Breez-style**: the seed always lives in the vault's device-only tier (encrypted at rest, no auth binding) and launch connects silently, like the PWA. A dedicated Security page (SideMenu, native only) offers an opt-in 6-digit PIN, and on top of it an optional biometric gate plus an auto-lock timeout (glow-web `services/appLock.ts`, `hooks/useAppLock.ts`, `pages/SecurityPage.tsx`, `components/LockScreen.tsx` + the plugin's standalone `authenticate()`). PIN/biometrics gate the UI only, deliberately NOT crypto binding, because a biometric-bound seed could never be released by a PIN fallback. The biometric-bound tier and its startup unlock flow (UnlockingPage / UnlockPage, `native-unlocking` / `native-locked`) survive only as a legacy migration path: pre-app-lock installs unlock once via the OS prompt, then the seed moves to the device-only tier.
 
 **Architecture:**
 
-- `glow-web/src/services/secureStorage.ts` — the single abstraction. Exports a `SecureStorage` interface (`isSupported`, `hasStoredSeed`, `storeSeed`, `retrieveSeed`, `clearSeed`), a typed `SecureStorageError` with codes for every fallback path (`USER_CANCELLED`, `BIOMETRIC_LOCKOUT`, `BIOMETRIC_NOT_ENROLLED`, `BIOMETRIC_UNAVAILABLE`, `KEY_INVALIDATED`, `NO_STORED_SEED`, `NOT_SUPPORTED`, `UNKNOWN`), and a module-level `secureStorage` singleton that resolves to `NativeSecureStorage` on Capacitor hosts or `NoopSecureStorage` everywhere else. No plugin details leak past this file. glow-web does NOT depend on the plugin's npm package — it accesses the runtime global via `window.Capacitor.Plugins.NativeVault`, the same pattern used by `nativePasskeyPrfProvider.ts`.
+- `glow-web/src/services/secureStorage.ts` — the single abstraction. Exports a `SecureStorage` interface (`isSupported`, `hasStoredSeed`, `storeSeed`, `retrieveSeed`, `clearSeed`), a `DrainOnlySecureStorage` narrowing of it without `storeSeed` (the type the bound-tier singleton uses, so a seed cannot be written back to it), a typed `SecureStorageError` with codes for every fallback path (`USER_CANCELLED`, `BIOMETRIC_LOCKOUT`, `BIOMETRIC_NOT_ENROLLED`, `BIOMETRIC_UNAVAILABLE`, `KEY_INVALIDATED`, `NO_STORED_SEED`, `NOT_SUPPORTED`, `UNKNOWN`), and a module-level `secureStorage` singleton that resolves to `NativeSecureStorage` on Capacitor hosts or `NoopSecureStorage` everywhere else. No plugin details leak past this file. glow-web does NOT depend on the plugin's npm package — it accesses the runtime global via `window.Capacitor.Plugins.NativeVault`, the same pattern used by `nativePasskeyPrfProvider.ts`.
 
 - `plugins/capacitor-native-vault/` — in-house Capacitor plugin owning the platform-native crypto. Trait-style providers split each concern into its own file:
-  - `BiometricAuthProviding` (Swift protocol / Kotlin interface) — surfaces `checkCapability()` + `authenticate()` / `authenticateWithCrypto()`.
-  - `SeedVaultProviding` — surfaces `hasStoredSeed`, `storeSeed` / `prepareEncryptCipher` + `finishEncryptAndStore`, `retrieveSeed` / `prepareDecryptCipher` + `finishDecrypt`, `clearSeed`. The Android interface uses the prepare/finish split because biometric-bound Keystore keys require a `BiometricPrompt.CryptoObject` to authorize the cipher mid-flow; the iOS interface stays single-step because the Keychain handles the prompt inline.
-  - The Capacitor plugin class is a thin orchestrator that delegates to the providers — easy to swap implementations for tests.
+  - `BiometricAuthProviding` (Swift protocol / Kotlin interface): `checkCapability()` + `authenticate()`. Prompt only: binding a prompt to a specific Keystore operation would need an auth-per-use key, and no shipped tier has one.
+  - `SeedVaultProviding`: the device-only tier (`hasStoredSeedDeviceOnly`, `storeSeedDeviceOnly`, `retrieveSeedDeviceOnly`, `clearSeedDeviceOnly`) plus the retired bound tier, read-only (`hasStoredSeed`, `prepareDecryptCipher` + `finishDecrypt`, `clearSeed`). No store counterpart on the bound tier.
+  - The Capacitor plugin class is a thin orchestrator that delegates to the providers.
 
-- **F3 biometric binding** (defense-in-depth at the OS layer, not just an external gate):
-  - **iOS** — Keychain items are protected by a `SecAccessControl` constructed with `[.biometryCurrentSet]` and `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. The biometric prompt is triggered inline by `SecItemCopyMatching` against the access-controlled item, not by a separate `LAContext.evaluatePolicy` call. Adding a new Face ID / Touch ID enrollment voids the item automatically (Apple's recommended failsafe pattern). `hasStoredSeed` uses `kSecUseAuthenticationUIFail` for a presence check that doesn't trigger a prompt. Both `storeSeed` and `retrieveSeed` run on `Task.detached` so the blocking Keychain call doesn't freeze the WebView thread.
-  - **Android** — the AES-GCM Keystore key is generated with `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)` on API 30+, and `setInvalidatedByBiometricEnrollment(true)`. Per-operation auth means the cipher must be wrapped in a `BiometricPrompt.CryptoObject` before any `doFinal()` call. The plugin orchestrates a three-step `prepare → authenticateWithCrypto → finish` flow per store/retrieve. Capacitor 8 dispatches plugin methods on the `CapacitorPlugins` worker thread — `BiometricPrompt.authenticate()` requires the main thread (uses FragmentManager transactions internally), so `BiometricPromptAuth.runAuthenticate` wraps the prompt construction + invocation in `activity.runOnUiThread { }`.
+- **Biometric-bound tier**:
+  - **iOS**: Keychain items are protected by a `SecAccessControl` constructed with `[.biometryCurrentSet]` and `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. The prompt is triggered inline by `SecItemCopyMatching` against the access-controlled item, not by a separate `LAContext.evaluatePolicy` call. A new Face ID / Touch ID enrollment voids the item automatically. `hasStoredSeed` uses `kSecUseAuthenticationUIFail` for a presence check that doesn't prompt. Reads run on `Task.detached` so the blocking Keychain call doesn't freeze the WebView thread. No grace window: every retrieve prompts.
+  - **Android** (retired, read-only): the key authorizes on a time basis rather than per use, so a decrypt can succeed on the strength of an earlier, unrelated authentication.
+    - The write path is deleted, so nothing generates one of these keys again. Keystore key parameters are immutable after generation, so changing key-gen would not have affected existing installs.
+    - `hasStoredSeed` / `retrieveSeed` / `clearSeed` remain so a pre-app-lock install can move its seed into the device-only tier once (`useBreezSdk.retryUnlock`) and then delete the key.
+    - `retrieveSeed` prompts before every decrypt, with no attempt-first fast path. An existing key cannot be tightened, so the guarantee sits at the caller.
+    - Below API 30 the key used the deprecated `setUserAuthenticationValidityDurationSeconds`, which any device unlock satisfies. The prompt accepts a device credential on those versions (`allowDeviceCredential`), so an Android 9/10 user with a PIN but no fingerprint can still read their seed.
+    - `LegacyBoundTierDrainTest` (androidTest) plants a legacy-parameter key and asserts it still moves across. API < 30 only; self-skips elsewhere.
+  - Capacitor 8 dispatches plugin methods on the `CapacitorPlugins` worker thread, and `BiometricPrompt.authenticate()` requires the main thread (FragmentManager transactions internally), so `BiometricPromptAuth` wraps prompt construction + invocation in `activity.runOnUiThread { }`.
 
-- **F1 UnlockPage** — when the secure-storage retrieve path encounters `USER_CANCELLED` or `BIOMETRIC_LOCKOUT`, `useBreezSdk` transitions `startupState` to `'native-locked'` instead of falling through to the welcome screen. The router shows a dedicated `UnlockPage` with a "Unlock with Face ID / Fingerprint" CTA (label adapts via `NativeVault.checkBiometry()`) and a "Use a different wallet" escape that wipes the vault and routes back to onboarding.
+- **UnlockPage**: when the retrieve path hits `USER_CANCELLED` or `BIOMETRIC_LOCKOUT`, `useBreezSdk` sets `startupState` to `'native-locked'` instead of falling through to the welcome screen. The router shows `UnlockPage` with an unlock CTA (label adapts via `NativeVault.checkBiometry()`) and an escape that wipes the vault and routes back to onboarding.
 
-- **F3 migration** — first launch on an F3 build wipes any pre-existing F2-era vault entries via `secureStorage.clearSeed()` before any other operation, then writes a localStorage marker (`F3_MIGRATION_MARKER_KEY`) so subsequent launches skip the wipe. F2-era items would still be readable under the old access policies, which would silently bypass the new biometric binding — forced re-onboarding via the existing passkey fallback is the simplest way to ensure every install starts fresh under F3 protection.
+- **Fresh-install wipe**: the first launch after install clears any pre-existing vault entry before any other operation, then writes a durable marker (`F3_MIGRATION_MARKER_KEY`) so later launches skip it. iOS Keychain entries survive reinstall, so without this a new install could inherit an entry it has no marker for. Both markers must be present for a legacy entry to survive startup.
 
-- Integration in `glow-web/src/hooks/useBreezSdk.ts`: the mount-time `checkForExistingWallet` tries `secureStorage.retrieveSeed` before falling through to the legacy localStorage / passkey paths. `connectWallet` takes a `source: ConnectSeedSource` parameter (`'onboarding'` vs `'secureStorage'`) so the post-connect persist block skips a redundant `storeSeed` write when the seed was just retrieved from the same store. `handleLogout` calls `clearSeed` alongside the existing `clearMnemonic` / `clearPasskeyMode`. An `isSecuringSeed` flag flips around the `storeSeed` await so `PasskeyPage`'s `initializing` phase swaps its loading copy from "Starting Glow…" to "Enabling biometric unlock…" while the F3 prompt is showing — without it, the second biometric prompt during onboarding looks like an unexplained extra prompt on top of an unrelated spinner.
+- Integration in `glow-web/src/hooks/useBreezSdk.ts`: the mount-time `checkForExistingWallet` tries the vault before falling through to the legacy localStorage / passkey paths. `connectWallet` takes a `source: ConnectSeedSource` parameter (`'onboarding'` vs `'secureStorage'`) so the post-connect persist block skips a redundant write when the seed was just read from the same store. `handleLogout` clears the vault alongside the existing `clearMnemonic` / `clearPasskeyMode`. Onboarding does not prompt: the seed goes straight to the device-only tier.
 
 ### ⚠️ Security: `loggingBehavior: 'none'` is REQUIRED
 
@@ -79,30 +86,19 @@ The original Phase 3 PR (#2) used the `@aparajita/capacitor-secure-storage` and 
 - `'production'` → **always** logs, including release builds (the OPPOSITE of what the name implies)
 - `'none'` → never logs in any build config
 
-The value that actually suppresses logging is `'none'`, not `'production'`. The initial F2 "security fix" pinned `'production'` based on a misreading of the setting name and therefore **did nothing** — bridge traces were still leaking. F3 verification caught this by grepping logcat for the mnemonic after Test 1 and finding a full plaintext `storeSeed` payload. Do not trust the setting name; trust the source code.
+The value that actually suppresses logging is `'none'`, not `'production'`. Do not trust the setting name; check `CapConfig.java`.
 
-Why we care: `Bridge.java:826` logs every plugin call's argument payload at verbose level:
+Why we care: `Bridge.java:826` logs every plugin call's argument payload at verbose level, and some of this app's plugin calls carry key material. On any setting other than `'none'` those payloads reach logcat (Android) / NSLog (iOS), readable by any process holding `READ_LOGS`.
 
-```
-V Capacitor: callback: X, pluginId: Y, methodName: Z, methodData: {...}
-```
+**Tradeoff**: `'none'` also suppresses WebView `console.*` bridging to native logs, so glow-web's structured logger breadcrumbs will not appear in logcat. Use the in-app log viewer (Settings > Share Logs) instead.
 
-Several plugin calls in this app pass wallet seed material through the bridge:
-
-- `PasskeyPrf.deriveSeeds` returns the 32-byte PRF entropy as base64.
-- `NativeVault.storeSeed` receives the plaintext mnemonic JSON blob from `NativeSecureStorage.storeSeed`.
-
-With any setting other than `'none'`, those payloads are written to logcat (Android) / NSLog (iOS) and are readable by any process with `READ_LOGS` (granted to many OEM apps on Android; Console.app on iOS).
-
-**Tradeoff**: `'none'` also suppresses WebView `console.*` → native log bridging (via `BridgeWebChromeClient.onConsoleMessage` → `Logger.info/warn/error`, all gated on `shouldLog()`). Structured logger breadcrumbs from glow-web will no longer appear in logcat. Use the in-app log viewer (Settings → Share Logs) for debugging those paths.
-
-This is defense-in-depth at the bridge layer. The proper fix (tracked as F2 in the follow-ups) is to keep plaintext seed material on the native side of the bridge entirely — until that lands, the config pin is the only safety net.
+This is defense-in-depth at the bridge layer, not the primary control. See the follow-ups below.
 
 ### Debugging breadcrumbs via `VITE_CONSOLE_LOGGING`
 
 The structured logger in `glow-web/src/services/logger.ts` gates `console.*` output behind `isConsoleLoggingEnabled()`, which defaults to `import.meta.env.DEV` (on in `vite dev`, off in `vite build`). With `loggingBehavior: 'none'` pinned in `capacitor.config.ts`, ALL bridged WebView console output is suppressed regardless of `console.warn` / `console.error` level — so even a verbose `VITE_CONSOLE_LOGGING=true` build won't surface logger breadcrumbs in logcat / Console.app.
 
-The recommended debugging path on this branch is the in-app log viewer:
+The recommended debugging path is the in-app log viewer:
 
 > Settings → Share Logs
 
@@ -115,16 +111,17 @@ VITE_CONSOLE_LOGGING=true make deploy-ios
 
 Do NOT set `VITE_CONSOLE_LOGGING=true` for production release builds.
 
-### Outstanding follow-ups (post-`feat/native-secure-storage-followups`)
+### Outstanding follow-ups
 
-- **Plaintext seeds across the Capacitor bridge**: even with `loggingBehavior: 'none'`, `NativeVault.storeSeed` still passes the JSON-encoded mnemonic through Capacitor's bridge as a plain method argument. The proper fix is an opaque-handle pattern: have `capacitor-passkey-prf` keep the PRF entropy on the native side and expose only an opaque handle to JS, then have `capacitor-native-vault` accept a passkey-derived handle directly so the seed never crosses the bridge in plaintext at all. Until that lands, the `loggingBehavior` config pin is the only thing keeping bridge traces out of system logs — defense-in-depth would make the config choice non-load-bearing.
-- **Logcat sanity check on a debug Android build**: re-grep `adb logcat` for "mnemonic" / "seed" / wallet words after a fresh onboarding run to confirm the `loggingBehavior: 'none'` fix is working end-to-end. Was queued during Phase 3 device verification but interrupted before the check could run.
+- **Key material crosses the Capacitor bridge**: the vault's device-only methods still take and return the seed as a plain method argument. The fix is an opaque-handle pattern: keep the PRF entropy native-side in `capacitor-passkey-prf`, expose only a handle to JS, and have `capacitor-native-vault` accept that handle, so the seed never crosses the bridge at all. That would also make the `loggingBehavior` pin non-load-bearing.
+- **Retrieval from the device-only tier is ungated.** Anything running in the WebView can call it. The app-lock PIN and biometric gate the UI, not this. Options: hold an unlock token native-side, or require device auth per retrieval.
+- **Logcat sanity check on a debug Android build**: grep `adb logcat` for seed-related words after a fresh onboarding run to confirm the `loggingBehavior` pin holds end to end.
 
 ## Phase 4A: App Polish
 
-Makes the Capacitor shell feel like a first-class native app. Ships on
-the `feat/phase-4a-app-polish` branch. This section is the
-architecture-level pointer list a maintainer needs to navigate the code.
+Makes the Capacitor shell feel like a first-class native app. This
+section is the architecture-level pointer list a maintainer needs to
+navigate the code.
 
 ### Branding + native shell
 
@@ -155,7 +152,7 @@ architecture-level pointer list a maintainer needs to navigate the code.
   `android:screenOrientation="portrait"` in `AndroidManifest.xml`,
   `UISupportedInterfaceOrientations` in `Info.plist`.
 
-### Capacitor plugins installed in this phase
+### Capacitor plugins
 
 - `@capacitor/splash-screen`, `@capacitor/status-bar`,
   `@capgo/capacitor-navigation-bar` — system bar styling
@@ -166,7 +163,7 @@ architecture-level pointer list a maintainer needs to navigate the code.
   for log export
 - `@capacitor/app` — Android hardware back button events
 
-All configured and wired via `capacitor.config.ts` (with `loggingBehavior: 'none'` preserved from Phase 3).
+All configured and wired via `capacitor.config.ts`, where `loggingBehavior: 'none'` stays pinned.
 
 ### Critical patches (`patch-package`, `postinstall`)
 
@@ -175,78 +172,62 @@ work as a pair: the keyboard patch only exists so the android patch's
 animation callback can fire. Bump either package only when re-authoring
 both patches together (both are in the dependabot ignore list).
 
-- **`patches/@capacitor+android+8.3.0.patch`** — makes
+- **`patches/@capacitor+android+8.3.0.patch`**: makes
   `com.getcapacitor.plugin.SystemBars`'s IME padding on the WebView
-  parent conditional on the Android version, because who resizes the
-  window when the keyboard opens differs by OS version:
+  parent conditional on the Android version, because which layer resizes
+  the window when the keyboard opens differs by OS version:
   - **Android 14 and below**: the framework honors
     `windowSoftInputMode="adjustResize"` and shrinks the activity
     content frame itself. Upstream's unconditional `imeInsets.bottom`
-    padding double-subtracts the keyboard height there, leaving the
-    WebView one keyboard shorter than the visible area. Diagnosed via
-    `adb shell uiautomator dump`: parent `ViewGroup` correctly sized
-    (1080×1356) but the `WebView` child shrunk to 1080×553 = parent
-    − 803 ≈ imeInsets.bottom (Ionic forum /251049/4, vosecek). The
-    patch skips IME padding on these versions.
+    padding double-subtracts the keyboard height, leaving the WebView
+    one keyboard shorter than the visible area. The patch skips IME
+    padding on these versions.
   - **Android 15+**: enforced edge-to-edge (targetSdk 35+) makes the
-    framework IGNORE `adjustResize` (`SOFT_INPUT_ADJUST_RESIZE` is
+    framework ignore `adjustResize` (`SOFT_INPUT_ADJUST_RESIZE` is
     documented as ignored for windows not fitting system windows), so
     the SystemBars IME padding is the ONLY thing that resizes the
-    WebView above the keyboard. The patch keeps upstream's padding
-    here, and additionally zeroes the IME inset dispatched into the
-    WebView so Chromium (WebView 140+ consumes insets) can't ALSO
-    shrink/pan its visual viewport. An earlier patch revision removed
-    the padding on all versions; on Android 15+ that left the keyboard
-    overlaying the WebView, Chromium panned its visual viewport to
-    reveal the focused field, and bottom sheets ended up over-scrolled
-    with a keyboard-sized dead gap (breez/glow-web#308).
-  - **Show-animation deferral (#126)**: the padding waits out a
-    running IME show animation (`imeAnimationInFlight`, tracked by a
+    WebView above the keyboard. The patch keeps upstream's padding here
+    and additionally zeroes the IME inset dispatched into the WebView,
+    so Chromium (WebView 140+ consumes insets) cannot ALSO shrink or pan
+    its visual viewport. Do not remove the padding on these versions:
+    the keyboard then overlays the WebView, Chromium pans its visual
+    viewport to reach the focused field, and bottom sheets end up
+    over-scrolled behind a keyboard-sized dead gap.
+  - **Show-animation deferral**: the padding waits out a running IME
+    show animation (`imeAnimationInFlight`, tracked by a
     `WindowInsetsAnimationCompat.Callback` on the WebView parent) and
-    lands at `onEnd` via `requestApplyInsets`. Applying it at the
-    static inset dispatch resized the WebView a full keyboard height
-    at the animation's START, which cut off the bottom of bottom
-    sheets behind an empty band while the keyboard was still sliding
-    in. Deferred, the strip the WebView gives up is already covered
-    by the keyboard, so the resize is invisible and glow-web's sheet
-    tween (running from `keyboardWillShow`) is the only visible
-    motion, mirroring iOS's deferred `setFrame`. Hide is untouched:
-    insets already report the IME gone at the hide animation's start,
-    so the padding comes off immediately and the revealed strip stays
-    behind the departing keyboard. If the IME appears with no
-    animation (window focus regain, animations disabled), no
-    `onPrepare` fires and the padding applies instantly as before.
-    The IME inset is zeroed into the WebView whenever we own IME
-    handling (Android 15+), including mid-animation, so Chromium
-    never self-shrinks or pans.
-  - **IME-ownership gate (#139)**: the padding also requires
+    lands at `onEnd` via `requestApplyInsets`. Applied at the static
+    inset dispatch instead, the WebView loses a full keyboard height at
+    the animation's START, cutting off the bottom of sheets behind an
+    empty band while the keyboard is still sliding in. Deferred, the
+    strip it gives up is already covered by the keyboard, so the resize
+    is invisible. Hide is untouched: insets report the IME gone at the
+    hide animation's start, so the padding comes off immediately and the
+    revealed strip stays behind the departing keyboard. If the IME
+    appears with no animation (window focus regain, animations
+    disabled), no `onPrepare` fires and the padding applies instantly.
+  - **IME-ownership gate**: the padding also requires
     `InputMethodManager.isAcceptingText()`, i.e. the IME is editing
     text in THIS process. Launching over another app's dismissing
-    keyboard (the launcher's app search) reports the IME visible for
-    the first frames, and padding for it shrank the WebView a keyboard
-    height, painting the wallet's action bar mid-screen. Gating on
-    `hasWindowFocus()` instead does NOT work (#140): the focus-gain
-    `requestApplyInsets` below fires while the departing keyboard is
-    still reported visible, so it re-lands the padding it was meant to
-    skip. Not fixable in glow-web either — the padding sits on the
-    WebView's PARENT, so those pixels are outside the WebView and no
-    CSS can paint there.
+    keyboard (the launcher's app search) reports the IME visible for the
+    first frames, and padding for it shrinks the WebView a keyboard
+    height mid-screen. `hasWindowFocus()` is NOT a working substitute:
+    the focus-gain `requestApplyInsets` below fires while the departing
+    keyboard is still reported visible, re-landing the padding it was
+    meant to skip. Not fixable in glow-web either, because the padding
+    sits on the WebView's PARENT and no CSS can paint there.
   - Also asks for a fresh inset dispatch on window-focus gain so the
     launch-time `--safe-area-inset-*` CSS injection self-corrects
     after the app-open transition.
 
-- **`patches/@capacitor+keyboard+8.0.5.patch`** — one-line change:
-  the decor-level `WindowInsetsAnimationCompat.Callback` (which fires
-  the plugin's `keyboardWillShow`/`keyboardDidShow` JS events) uses
+- **`patches/@capacitor+keyboard+8.0.5.patch`**: one-line change. The
+  decor-level `WindowInsetsAnimationCompat.Callback` (which fires the
+  plugin's `keyboardWillShow` / `keyboardDidShow` JS events) uses
   `DISPATCH_MODE_CONTINUE_ON_SUBTREE` instead of `DISPATCH_MODE_STOP`,
   so the animation dispatch reaches the WebView parent where the
-  SystemBars patch listens. SystemBars' own callback uses
+  SystemBars patch listens. SystemBars' own callback keeps
   `DISPATCH_MODE_STOP`, so the WebView itself still receives no
-  animation dispatches (Chromium behavior unchanged). The former
-  8.0.3-era keyboard patch (upstream
-  [#30](https://github.com/ionic-team/capacitor-keyboard/issues/30) /
-  [PR #60](https://github.com/ionic-team/capacitor-keyboard/pull/60))
-  shipped upstream in 8.0.5 and is unrelated to this one.
+  animation dispatches and Chromium behaviour is unchanged.
 
 ### Android hardware back button
 
@@ -271,7 +252,7 @@ Protects against a race where the auto-triggered biometric lands on
 a non-STARTED activity (user pressed Home during the ~400ms delay
 between `UnlockingPage` rendering and `retryUnlock` firing):
 
-- **Native (Android)** — `BiometricPromptAuth.runAuthenticate` in
+- **Native (Android)**: `BiometricPromptAuth.runAuthenticate` in
   `plugins/capacitor-native-vault` checks
   `activity.lifecycle.currentState.isAtLeast(STARTED)` before
   calling `prompt.authenticate`, and wraps the call in a
@@ -279,13 +260,13 @@ between `UnlockingPage` rendering and `retryUnlock` firing):
   `FragmentManager.commit` would throw, the auth callback would
   never fire, and the JS Promise would hang forever.
 
-- **JS** — `useBreezSdk` subscribes to `App.appStateChange` from
+- **JS**: `useBreezSdk` subscribes to `App.appStateChange` from
   `@capacitor/app` and re-fires `retryUnlock` when the app returns
   to the foreground while `startupState === 'native-unlocking'`.
   Guarded by `retryUnlockInFlightRef` against concurrent
   invocation.
 
-- **iOS** — `KeychainSeedVault.retrieveSeed` now pre-checks
+- **iOS**: `KeychainSeedVault.retrieveSeed` pre-checks
   `LAContext.canEvaluatePolicy` before `SecItemCopyMatching` so a
   user who denied the Face ID permission gets a targeted
   `BIOMETRIC_UNAVAILABLE` error (mapped to a helpful message on
@@ -303,9 +284,8 @@ between `UnlockingPage` rendering and `retryUnlock` firing):
   `autoComplete`, `spellCheck`, `autoFocus`, `name`, `inputRef`.
 - `src/components/ui/sheets/BottomSheet.tsx` — reads viewport
   height from `window.visualViewport.height` instead of computing
-  `initialInnerHeight − keyboardHeight` from the plugin event.
-  The computation double-subtracted the nav bar and left a
-  ~128 physical-px gap; the visualViewport read is correct.
+  `initialInnerHeight - keyboardHeight` from the plugin event.
+  That computation double-subtracts the nav bar and leaves a gap.
 
 ### Standalone web compatibility
 
@@ -314,9 +294,7 @@ Every native-only code path is guarded by
 `secureStorage.isSupported()` returns false on web, which means
 `UnlockingPage` / `UnlockPage` are never mounted in a web build.
 `useBackButton`, `useStatusBarColor`, `statusBarManager`,
-`dismissKeyboard` all no-op on web. Verified via dev server +
-Playwright (home, passkey home, mnemonic home, restore page all
-render with zero console errors).
+`dismissKeyboard` all no-op on web.
 
 ## Phase 4B: Continuous Integration
 
@@ -340,8 +318,8 @@ work lives in `.github/` plus small accommodations in `Makefile`,
   HEAD matches when present. `SPARK_SDK_ALLOW_DRIFT=1` bypasses
   the verify for local SDK-side development. Exit 0 = ready,
   exit 1 = drift detected.
-- `Makefile` exposes `make resolve-sdk`, and `make sdk` now
-  depends on it so fresh checkouts auto-clone the SDK.
+- `Makefile` exposes `make resolve-sdk`, and `make sdk` depends
+  on it so fresh checkouts auto-clone the SDK.
 
 ### CI workflows
 
@@ -369,14 +347,14 @@ Pushes to `main` run ONLY the SDK cache warmers (`warm-sdk-linux`
 + `warm-sdk-macos`), no consumer jobs, no artifacts. GitHub cache
 scoping lets any run restore default-branch caches but never a
 sibling branch's, another tag's, or a PR's, so main is the
-canonical warm-cache holder every ref inherits from (PR #85).
+canonical warm-cache holder every ref inherits from.
 Consequences:
 
 - **Cut release/preview tags only after the post-merge main CI
   run finishes.** A tag pushed seconds after merging an SDK pin
   bump races the ~40-min cold warm and rebuilds the SDK from
-  scratch inside the release pipeline (rc-1 of 0.1.0 did exactly
-  this). Seconds-cheap when the pin didn't change.
+  scratch inside the release pipeline. Seconds-cheap when the pin
+  didn't change.
 - PR warmers build wasm only (nothing on a PR consumes Android
   artifacts); full wasm+android / wasm+ios sets are built on main
   pushes, tags, and dispatches. The macOS warmer reuses the
@@ -438,10 +416,10 @@ Two bash scripts at `scripts/ci/` handle the Ad Hoc signing the
   `~/Library/MobileDevice/Provisioning Profiles/`. Reads generic
   env vars `P12_BASE64`, `P12_PASSWORD`,
   `PROVISIONING_PROFILE_BASE64`, `KEYCHAIN_PASSWORD`. Logs the
-  derived profile type + provisioned-device count for
-  debuggability, but does not assert — keeps the script
-  permissive for local dev. A wrong-type profile will still fail,
-  just later at the xcodebuild export step.
+  derived profile type + provisioned-device count, but
+  deliberately does not assert, which keeps it usable for local
+  dev. A wrong-type profile still fails, just later at the
+  xcodebuild export step.
 - `build-ios-ipa.sh` — `xcodebuild archive` +
   `xcodebuild -exportArchive`. Accepts `$1` configuration
   (Debug | Release) and `$2` method — canonicalised on
@@ -469,9 +447,9 @@ PRs without the label can still merge — see
 
 ### Required secrets
 
-Organized by pipeline phase. Phase 4C adds `IOS_RELEASE_*`,
-`FASTLANE_*` (or `APP_STORE_CONNECT_API_*`), `FIREBASE_ANDROID_APP_ID_PREVIEW`,
-and Android release secrets (not yet listed — pending Android path).
+Organized by pipeline phase. The Android release signing secrets
+(`RELEASE_KEYSTORE_*`, `PLAY_SERVICE_ACCOUNT_JSON`) are not in this
+table; see "Android release signing" under Phase 4C.
 
 | Secret | Phase | Purpose |
 |--------|-------|---------|
@@ -508,9 +486,8 @@ Breez-org's plan quota:
 - DerivedData is NOT cached (invalidation is fragile); Pods
   + `~/Library/Caches/CocoaPods` are.
 
-Expected total: ~6,900 billed minutes/month. Fits Enterprise
-Cloud easily; ~3,900-minute overage on Pro/Team at ~$30/mo
-if the numbers track the estimate.
+Expected total: ~6,900 billed minutes/month, which fits
+Enterprise Cloud and runs ~3,900 minutes over on Pro/Team.
 
 ## Phase 4C: Store Distribution
 
@@ -519,14 +496,13 @@ Store internal testing + TestFlight. Activated externally by
 H1–H8 (Play app + service account, ASC app + API key or legacy
 Apple ID creds, upload keystore + secrets, iOS distribution
 cert + app-store profile, Firebase Android + iOS app IDs).
-Lives on `feat/phase-4c-release`. See
-`DEVELOPMENT.md` "Release signing (Phase 4C)" for the full
+See `DEVELOPMENT.md` "Release signing (Phase 4C)" for the full
 setup + release-cutting walkthrough; this section is the
 maintainer pointer list.
 
 ### Bundle ID + version derivation
 
-- **Debug/release bundle ID split** (reversed D1):
+- **Debug/release bundle ID split**:
   - Debug: `technology.breez.glow.dev`. Android via
     `applicationIdSuffix ".dev"` on the `debug` buildType in
     `android/app/build.gradle`. iOS via Debug build configuration
