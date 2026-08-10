@@ -90,7 +90,7 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
         return try {
             val ciphertext = Base64.decode(ciphertextBase64, Base64.NO_WRAP)
             val plaintext = cipher.doFinal(ciphertext)
-            SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+            SeedVaultResult.Ok(plaintext.useThenZero { String(it, Charsets.UTF_8) })
         } catch (e: UserNotAuthenticatedException) {
             SeedVaultResult.Error(
                 NativeVaultErrorCode.USER_NOT_AUTHENTICATED,
@@ -132,7 +132,7 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
             val iv = cipher.iv
-            val ciphertext = cipher.doFinal(seed.toByteArray(Charsets.UTF_8))
+            val ciphertext = seed.toByteArray(Charsets.UTF_8).useThenZero { cipher.doFinal(it) }
 
             // Write iv + ciphertext atomically, so that whenever the
             // ciphertext is present the matching IV is too.
@@ -188,7 +188,7 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_BITS, iv))
             val plaintext = cipher.doFinal(ciphertext)
-            SeedVaultResult.Ok(String(plaintext, Charsets.UTF_8))
+            SeedVaultResult.Ok(plaintext.useThenZero { String(it, Charsets.UTF_8) })
         } catch (e: GeneralSecurityException) {
             SeedVaultResult.Error(
                 NativeVaultErrorCode.UNKNOWN,
@@ -290,6 +290,21 @@ class KeystoreSeedVault(context: Context) : SeedVaultProviding {
             ks.deleteEntry(KEY_ALIAS_DEVICE_ONLY)
         }
     }
+
+    /**
+     * Run [block] over these bytes, then overwrite them, so the buffer does
+     * not outlive the operation.
+     *
+     * Only covers buffers this class owns. The `String` on either side of
+     * the boundary is immutable and stays in the heap until GC: keeping it
+     * off the bridge entirely is the real fix (see CLAUDE.md).
+     */
+    private inline fun <T> ByteArray.useThenZero(block: (ByteArray) -> T): T =
+        try {
+            block(this)
+        } finally {
+            fill(0)
+        }
 
     companion object {
         private const val ANDROID_KEY_STORE = "AndroidKeyStore"

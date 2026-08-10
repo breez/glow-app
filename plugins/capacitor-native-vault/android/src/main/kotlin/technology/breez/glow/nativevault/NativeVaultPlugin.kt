@@ -1,6 +1,11 @@
 package technology.breez.glow.nativevault
 
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
+import android.content.Context
 import android.os.Build
+import android.os.PersistableBundle
 import androidx.fragment.app.FragmentActivity
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -191,6 +196,36 @@ class NativeVaultPlugin : Plugin() {
         when (val result = vault.clearSeedDeviceOnly()) {
             is SeedVaultResult.Ok, SeedVaultResult.NotFound -> call.resolve()
             is SeedVaultResult.Error -> call.reject(result.message, result.code.code)
+        }
+    }
+
+    // MARK: - Sensitive clipboard
+
+    /**
+     * Copy text the OS should treat as a secret. Android 13+ reads
+     * EXTRA_IS_SENSITIVE to keep the value out of the clipboard preview.
+     * Expiry is the caller's timer: Android has no clipboard TTL.
+     */
+    @PluginMethod
+    fun copySensitive(call: PluginCall) {
+        val value = call.getString("value")
+        if (value == null) {
+            call.reject("Missing required parameter: value", NativeVaultErrorCode.UNKNOWN.code)
+            return
+        }
+        try {
+            val clip = ClipData.newPlainText(null, value).apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    description.extras = PersistableBundle().apply {
+                        putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                    }
+                }
+            }
+            val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            manager.setPrimaryClip(clip)
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject(e.message ?: "copySensitive failed", NativeVaultErrorCode.UNKNOWN.code)
         }
     }
 

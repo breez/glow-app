@@ -31,6 +31,12 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
     /// RP the client was initialized with; needed to key the registry.
     private var rpId: String?
 
+    /// RP IDs this app may run a ceremony against. Must stay in step with
+    /// the `webcredentials:` entries in App.entitlements (and Android's
+    /// assetlinks.json): a domain here the app is not associated with
+    /// dead-ends the OS sheet.
+    private static let allowedRpIds: Set<String> = ["keys.breez.technology"]
+
     @objc func initialize(_ call: CAPPluginCall) {
         guard #available(iOS 18.0, *) else {
             call.reject("Passkey requires iOS 18.0+", "PRF_NOT_SUPPORTED")
@@ -38,6 +44,12 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         guard let rpId = call.getString("rpId"), let rpName = call.getString("rpName") else {
             call.reject("rpId and rpName are required", "INVALID_ARGUMENT")
+            return
+        }
+        // The RP is ours to decide, not the WebView's. Settle it here, before
+        // a ceremony can put a domain in front of the user.
+        guard Self.allowedRpIds.contains(rpId) else {
+            call.reject("rpId '\(rpId)' is not an associated domain of this app", "INVALID_ARGUMENT")
             return
         }
         self.rpId = rpId
