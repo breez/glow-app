@@ -6,7 +6,8 @@
 # non-comment, non-blank line as the SHA. The pinned commit must
 # exist on origin (breez/spark-sdk) for CI to check it out.
 #
-# Pin: spark-sdk main (570ce64e3), with the passkey eval-at-create
-# work merged. Matches the vendored
-#   @breeztech/breez-sdk-spark tarball glow-web ships at main.
-570ce64e3d4172d82d5108579532561982308761
+# Pin: the spark-sdk 0.21.0 release tag. Keep this on a released tag
+# and in step with the @breeztech/breez-sdk-spark version in
+# glow-web/package.json: the native bindings and the WASM SDK must come
+# from the same commit, or the passkey plugin fails to build.
+7747d56560fa4b17d5f4d6a429cf35d7dc2d8cda

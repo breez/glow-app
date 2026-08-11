@@ -28,7 +28,7 @@ CURRENT="${GITHUB_REF_NAME:-HEAD}"
 # Prefer the annotated-tag message when invoked on a tag we distribute
 # from AND the tag has a non-empty annotation body. Lets a maintainer
 # push hand-curated notes via:
-#   git tag -a release-X.Y.Z -m "What's new since X.Y.W
+#   git tag -a release-X.Y.Z -m "What's new
 #
 #   * Bullet 1
 #   * Bullet 2"
@@ -61,13 +61,11 @@ PREV=$(git tag --list 'release-*' --sort=-version:refname \
 
 if [[ -n "$PREV" ]]; then
   RANGE="${PREV}..HEAD"
-  HEADER="Changes since ${PREV}:"
 else
   RANGE="HEAD"
-  HEADER="Initial release:"
 fi
 
-echo "$HEADER"
+echo "What's new"
 echo ""
 
 # awk instead of `head -40` because `head` closes its stdin after
