@@ -78,12 +78,12 @@ on:
         default: false
       notes:
         # Multiline string for custom release notes on Firebase App
-        # Distribution uploads. When empty, the preview jobs fall back
-        # to scripts/ci/release-notes.sh (auto-generated from git log
-        # since the prior release-* tag). Useful when dispatching a FAD
-        # build from `main` and wanting hand-curated notes that don't
-        # match the auto-generated commit-summary format.
-        description: 'Custom release notes for FAD (multiline; falls back to auto-generated when blank)'
+        # Distribution and store uploads. When empty, those jobs fall
+        # back to scripts/ci/release-notes.sh (auto-generated from git
+        # log since the prior release-* tag). A store build dispatched
+        # without a release-* tag has no annotated tag to read, so this
+        # is the only way to give testers hand-curated notes.
+        description: 'Custom release notes for FAD or store uploads (multiline; falls back to auto-generated when blank)'
         type: string
         default: ''
 
@@ -826,9 +826,15 @@ jobs:
         # edits:commit fails with "length N, which is too long (max: 500)"
         # otherwise. Truncate to 497 + "…"; git log is newest-first so the
         # most recent commit subjects survive.
+        env:
+          INPUT_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
-          FULL_NOTES="$(./scripts/ci/release-notes.sh)"
+          if [[ -n "${INPUT_NOTES:-}" ]]; then
+            FULL_NOTES="$INPUT_NOTES"
+          else
+            FULL_NOTES="$(./scripts/ci/release-notes.sh)"
+          fi
           if [[ ${#FULL_NOTES} -gt 500 ]]; then
             SHORT_NOTES="${FULL_NOTES:0:497}…"
           else
@@ -1031,9 +1037,15 @@ jobs:
         run: ./scripts/ci/apply-ios-version.sh
 
       - name: Generate release notes
+        env:
+          INPUT_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
-          NOTES=$(./scripts/ci/release-notes.sh)
+          if [[ -n "${INPUT_NOTES:-}" ]]; then
+            NOTES="$INPUT_NOTES"
+          else
+            NOTES=$(./scripts/ci/release-notes.sh)
+          fi
           {
             echo "RELEASE_NOTES<<RELEASE_NOTES_EOF"
             echo "$NOTES"
