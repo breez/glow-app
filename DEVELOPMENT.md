@@ -239,6 +239,14 @@ or `gh workflow run`:
 | `target` | `ios` \| `android` \| `both` | yes | Platform(s) to build. `both` fires the matching iOS + Android jobs in parallel. |
 | `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play internal/closed/open testing (Android). |
 | `version` | `MAJOR.MINOR.PATCH` | only when `distribution=store` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
+
+> **`distribution=store` runs only from `main` or a `release-*` tag.**
+> A store dispatch signs with the real release identity and can push to
+> TestFlight and Play, so it is restricted to reviewed code; dispatching
+> it from a feature branch fails in `validate-inputs` within seconds.
+> `none` and `firebase` stay dispatchable from any branch, which is what
+> makes them useful for testing a branch build.
+
 | `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store`. Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
 | `ios_enable_buy` | `true` \| `false` | no (default `false`) | Buy Bitcoin is on by default in every build; iOS store builds disable it via `VITE_IOS_DISABLE_BUY=true` for App Review Guideline 3.1.5(iii). This toggle keeps the button in a store build — TestFlight open-beta only, never submit such a build for App Store review. `release-*` tag builds always disable it. |
 
@@ -441,6 +449,24 @@ Hoc' profile" at the export step.
 Apple Distribution cert expires 2026-12-23 — a cert rotation
 forces a profile regeneration too. See "Certificate rotation"
 below.
+
+### Release environment
+
+`android-release` and `ios-release` declare `environment: release`. The
+workflow side is in place; the rules themselves are configured in repo
+settings:
+
+> Settings > Environments > `release` > add **required reviewers**, and
+> under deployment branches allow only `main` and `release-*`.
+
+With no rules configured the environment inherits repository secrets and
+behaves exactly as before. With them on, a release run waits for an
+approval before it starts, which is expected rather than a failure.
+
+Moving the release secrets from repository scope into the environment
+itself tightens it further, so that no other job can read them. Do that
+only when the release pipeline is otherwise quiet: a secret that exists
+in neither scope fails the run at signing time.
 
 ### Required repository secrets
 

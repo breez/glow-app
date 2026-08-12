@@ -287,10 +287,30 @@ runs:
         contains(inputs.platforms, 'wasm') &&
         steps.wasm-tgz.outputs.cache-hit != 'true'
       shell: bash
+      # Pinned release archive, checksum-verified, instead of the upstream
+      # `init.sh` piped into a shell. That installer served whatever it
+      # served at the moment the warmer ran, so the toolchain behind a
+      # cached SDK artifact was not reproducible. Bumping wasm-pack means
+      # changing the version and both checksums together;
+      # install-pinned-tool.sh fails loudly on a stale pin.
+      env:
+        WASM_PACK_VERSION: v0.15.0
+        WASM_PACK_SHA256_LINUX_X86_64: c09f971ecaed9a2efc80fdcea7a00ef6b53c7fadc8c57d1f61b53a6aa66b668a
+        WASM_PACK_SHA256_MACOS_ARM64: 0abff4a03d670b6c00ea31d0e1608a72407e355f3d3765e9c30eb45cd5b7e318
       run: |
+        set -euo pipefail
         rustup target add wasm32-unknown-unknown
         if ! command -v wasm-pack >/dev/null 2>&1; then
-          curl --retry 3 -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64)  slug=x86_64-unknown-linux-musl; sha=$WASM_PACK_SHA256_LINUX_X86_64 ;;
+            Darwin-arm64)  slug=aarch64-apple-darwin;      sha=$WASM_PACK_SHA256_MACOS_ARM64 ;;
+            *) echo "::error::no pinned wasm-pack for $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          "$GITHUB_WORKSPACE/scripts/ci/install-pinned-tool.sh" \
+            "https://github.com/rustwasm/wasm-pack/releases/download/$WASM_PACK_VERSION/wasm-pack-$WASM_PACK_VERSION-$slug.tar.gz" \
+            "$sha"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
         fi
         wasm-pack --version
 
@@ -356,15 +376,27 @@ runs:
         rustup target add aarch64-linux-android armv7-linux-androideabi \
           i686-linux-android x86_64-linux-android
         # cargo-ndk >=4: the SDK bindings Makefile passes --link-libcxx-shared,
-        # which 3.x doesn't recognize. Prebuilt binary via cargo-binstall
-        # (seconds) instead of `cargo install` (compiled from source,
-        # ~1 min per cold run); binstall falls back to a source build
-        # when no release asset matches. Skipped when rust-cache already
-        # restored the right cargo-ndk into ~/.cargo/bin.
+        # which 3.x doesn't recognize. Take upstream's prebuilt binary
+        # (seconds) rather than `cargo install` (compiled from source,
+        # ~1 min per cold run). Skipped when rust-cache already restored the
+        # right cargo-ndk into ~/.cargo/bin.
+        #
+        # This used to go through cargo-binstall, fetched by piping a script
+        # from a moving branch into bash. Downloading the pinned cargo-ndk
+        # release directly drops that whole dependency: one checksum-verified
+        # archive rather than a script that fetches a tool that fetches a
+        # tool. Bumping the version means changing it and the checksum here.
         if ! cargo ndk --version 2>/dev/null | grep -q '4\.1\.2'; then
-          curl --retry 3 -L --proto '=https' --tlsv1.2 -sSf \
-            https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall -y cargo-ndk@4.1.2
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) slug=x86_64-unknown-linux-gnu
+                          sha=9451622c4567e8abb2c8005001855e32901c0b716ccdd3a173a4375fd03426e1 ;;
+            *) echo "::error::no pinned cargo-ndk for $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          "$GITHUB_WORKSPACE/scripts/ci/install-pinned-tool.sh" \
+            "https://github.com/bbqsrc/cargo-ndk/releases/download/v4.1.2/cargo-ndk-$slug-v4.1.2.tgz" \
+            "$sha"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
         fi
         cargo ndk --version
 

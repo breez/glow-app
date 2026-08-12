@@ -149,6 +149,8 @@ jobs:
           DISTRIBUTION: ${{ inputs.distribution }}
           VERSION:      ${{ inputs.version }}
           DRY_RUN:      ${{ inputs.dry_run }}
+          REF:          ${{ github.ref }}
+          ACTOR:        ${{ github.actor }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -157,6 +159,15 @@ jobs:
           if [[ "$DISTRIBUTION" == "store" ]]; then
             [[ -n "$VERSION" ]] || fail "distribution=store requires version input (MAJOR.MINOR.PATCH, e.g. 0.0.2)"
             [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must match MAJOR.MINOR.PATCH, got: '$VERSION'"
+            # A store dispatch signs with the release identity and uploads
+            # to TestFlight and Play, so it runs from reviewed code only.
+            # Everything else (none, firebase) stays dispatchable from any
+            # branch, which is what makes those useful for testing.
+            case "$REF" in
+              refs/heads/main|refs/tags/release-[0-9]*.[0-9]*.[0-9]*) ;;
+              *) fail "distribution=store may only be dispatched from main or a release-X.Y.Z tag, got: '$REF'. Merge first, then dispatch (or push the release tag)." ;;
+            esac
+            echo "store dispatch from '$REF' by '$ACTOR'"
           fi
 
           if [[ -n "$VERSION" && "$DISTRIBUTION" != "store" ]]; then
@@ -745,6 +756,12 @@ jobs:
   android-release:
     name: Android release (Play testing tracks)
     runs-on: ubuntu-latest
+    # On its own this changes nothing: the environment inherits repository
+    # secrets and has no rules until someone adds them. It exists so that
+    # turning on required reviewers and a branch restriction is a settings
+    # change on an environment that already exists, rather than a workflow
+    # edit. See DEVELOPMENT.md "Release environment".
+    environment: release
     needs: [warm-sdk-linux]
     timeout-minutes: 45
     # Above the read-only default: attesting the distributable APK mints a
@@ -969,6 +986,8 @@ jobs:
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
+    # See the note on android-release.
+    environment: release
     needs: [warm-sdk-macos, validate-inputs]
     timeout-minutes: 75
     # release-* tag push (paired with android-release + release-github) OR
