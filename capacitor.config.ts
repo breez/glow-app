@@ -78,10 +78,20 @@ const config: CapacitorConfig = {
   server: {
     // HTTPS scheme required for SharedArrayBuffer support in Android WebView
     androidScheme: 'https',
-    // COOP/COEP headers required by the WASM module (Breez Spark SDK)
+    // COOP/COEP headers required by the WASM module (Breez Spark SDK).
+    //
+    // The CSP mirrors the <meta http-equiv> in glow-web's index.html;
+    // keep the two byte-identical. The meta tag is what carries the
+    // policy in the WebView, and on Android it is also the only delivery
+    // that can work: WebViews without DOCUMENT_START_SCRIPT get the
+    // Capacitor bridge injected as an inline <script> right after
+    // <head>, which a header-delivered policy would block but a meta tag
+    // placed after it cannot.
     headers: {
       'Cross-Origin-Embedder-Policy': 'require-corp',
       'Cross-Origin-Opener-Policy': 'same-origin',
+      'Content-Security-Policy':
+        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; manifest-src 'self'",
     },
   },
   plugins: {
