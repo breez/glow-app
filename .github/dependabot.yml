@@ -223,8 +223,19 @@ updates:
         update-types: ["version-update:semver-major"]
 
   # ──────────────────────────────────────────────────────────────────
-  # GitHub Actions — pinned major versions in workflows + composite
-  # actions. Group minor/patch; hold individual majors for review.
+  # GitHub Actions. Every third-party action is referenced by full
+  # commit SHA with the version in a trailing comment:
+  #
+  #   uses: actions/checkout@3d3c42e5…  # v7.0.1
+  #
+  # A tag is a mutable pointer, so a tag reference does not describe a
+  # fixed version of anything: the same workflow can run different code
+  # on two runs. The SHA is what actually pins it; the comment is there
+  # so a human can read the diff. Dependabot updates both together, so
+  # bumps stay as reviewable as they were with tags. Keep new actions in
+  # this form rather than reverting one to a tag for convenience.
+  #
+  # Group minor/patch; hold individual majors for review.
   # ──────────────────────────────────────────────────────────────────
   - package-ecosystem: github-actions
     directory: /
