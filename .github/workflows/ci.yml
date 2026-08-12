@@ -798,6 +798,14 @@ jobs:
         # can introduce wrapping/LF that makes GNU base64 reject the input.
         run: |
           set -euo pipefail
+          # An unset secret renders as an empty string, which decodes to an
+          # empty file without error and leaves the signing config
+          # incomplete. Fail here, at the step whose name matches the cause,
+          # rather than several steps later.
+          if [[ -z "${RELEASE_KEYSTORE_BASE64//[[:space:]]/}" ]]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is empty or unset. Cannot sign a release build."
+            exit 1
+          fi
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
           echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
@@ -867,6 +875,24 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           cd android && ./gradlew :app:bundleRelease --no-daemon
+
+      # Confirms the bundle carries the certificate we expect before
+      # anything consumes it. Every later step implies success(), so a
+      # mismatch stops the Play upload, both track promotions, the
+      # universal-APK download and all artifact uploads.
+      - name: Verify AAB signing certificate
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          # Optional: set this repo variable to the upload certificate's
+          # SHA-256 to compare against a fixed value, the same way
+          # PLAY_EXPECTED_CERT_SHA256 pins the Play-signed APK further down.
+          # Unset falls back to comparing against the keystore this job
+          # decoded.
+          EXPECTED_UPLOAD_CERT_SHA256: ${{ vars.EXPECTED_UPLOAD_CERT_SHA256 }}
+        run: |
+          ./scripts/ci/verify-aab-signature.sh \
+            android/app/build/outputs/bundle/release/app-release.aab
 
       - name: Publish to Play internal
         # Split from the bundle build so dry_run can skip the upload while
