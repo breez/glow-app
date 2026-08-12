@@ -798,6 +798,11 @@ jobs:
         # can introduce wrapping/LF that makes GNU base64 reject the input.
         run: |
           set -euo pipefail
+          # An unset secret decodes to an empty file without error.
+          if [[ -z "${RELEASE_KEYSTORE_BASE64//[[:space:]]/}" ]]; then
+            echo "::error::RELEASE_KEYSTORE_BASE64 is empty or unset. Cannot sign a release build."
+            exit 1
+          fi
           printf '%s' "$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | base64 --decode > "$RUNNER_TEMP/release.keystore"
           echo "RELEASE_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
@@ -867,6 +872,19 @@ jobs:
           RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
           cd android && ./gradlew :app:bundleRelease --no-daemon
+
+      # Runs before every consumer of the bundle: later steps imply
+      # success(), so a mismatch stops uploads and promotions alike.
+      - name: Verify AAB signing certificate
+        env:
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          # Optional fixed value; unset compares against the decoded
+          # keystore instead.
+          EXPECTED_UPLOAD_CERT_SHA256: ${{ vars.EXPECTED_UPLOAD_CERT_SHA256 }}
+        run: |
+          ./scripts/ci/verify-aab-signature.sh \
+            android/app/build/outputs/bundle/release/app-release.aab
 
       - name: Publish to Play internal
         # Split from the bundle build so dry_run can skip the upload while

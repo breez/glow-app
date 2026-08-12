@@ -65,11 +65,8 @@ android {
         // RELEASE_KEYSTORE_BASE64 into a file at $RUNNER_TEMP/release.keystore
         // and exports RELEASE_KEYSTORE_PATH for this block to pick up.
         //
-        // When the envs are absent (any local `./gradlew assembleRelease`
-        // without secrets exported), storeFile stays unset and the
-        // buildTypes.release block below falls back to the debug
-        // signingConfig — produces an installable APK for smoke
-        // testing, just not one we can ship to Play.
+        // When the envs are absent, storeFile stays unset: see the
+        // buildTypes.release block below.
         release {
             def keystorePathEnv = System.getenv('RELEASE_KEYSTORE_PATH')
             def keystorePasswordEnv = System.getenv('RELEASE_KEYSTORE_PASSWORD')
@@ -94,9 +91,15 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Use the env-driven release config when populated,
-            // fall back to debug signing for local smoke builds.
-            signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
+            // Upload key, or unsigned on CI. No debug fallback there:
+            // verify-aab-signature.sh rejects the result. Throwing here
+            // instead would also break :app:assembleDebug, which configures
+            // this block but needs none of these values.
+            if (signingConfigs.release.storeFile) {
+                signingConfig signingConfigs.release
+            } else if (!System.getenv('CI')) {
+                signingConfig signingConfigs.debug
+            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals

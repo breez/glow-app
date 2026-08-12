@@ -542,12 +542,16 @@ maintainer pointer list.
   `android-release` job decodes `RELEASE_KEYSTORE_BASE64` →
   `$RUNNER_TEMP/release.keystore` + sets
   `RELEASE_KEYSTORE_PATH`.
-- When envs are absent (any local `gradle assembleRelease`
-  without secrets), the `release` buildType falls back to
-  debug signing via the conditional ternary
-  `signingConfig signingConfigs.release.storeFile ?
-   signingConfigs.release : signingConfigs.debug`. Local
-  smoke builds still produce installable APKs.
+- When envs are absent the fallback depends on where the build
+  runs: off CI the `release` buildType falls back to debug signing
+  so local smoke builds stay installable; on CI there is no
+  fallback and the artifact is left unsigned.
+- `scripts/ci/verify-aab-signature.sh` runs between `bundleRelease`
+  and every consumer of the bundle (Play upload, both promotes,
+  universal-APK download, artifact uploads). It compares the AAB's
+  certificate against the `EXPECTED_UPLOAD_CERT_SHA256` repo
+  variable when set, otherwise against the keystore the job
+  decoded. Covered by `scripts/ci/verify-aab-signature.test.sh`.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via
