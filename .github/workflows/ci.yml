@@ -149,6 +149,8 @@ jobs:
           DISTRIBUTION: ${{ inputs.distribution }}
           VERSION:      ${{ inputs.version }}
           DRY_RUN:      ${{ inputs.dry_run }}
+          REF:          ${{ github.ref }}
+          ACTOR:        ${{ github.actor }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -157,6 +159,13 @@ jobs:
           if [[ "$DISTRIBUTION" == "store" ]]; then
             [[ -n "$VERSION" ]] || fail "distribution=store requires version input (MAJOR.MINOR.PATCH, e.g. 0.0.2)"
             [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must match MAJOR.MINOR.PATCH, got: '$VERSION'"
+            # Store dispatches sign with the release identity, so they run
+            # from reviewed code only. none/firebase stay unrestricted.
+            case "$REF" in
+              refs/heads/main|refs/tags/release-[0-9]*.[0-9]*.[0-9]*) ;;
+              *) fail "distribution=store may only be dispatched from main or a release-X.Y.Z tag, got: '$REF'. Merge first, then dispatch (or push the release tag)." ;;
+            esac
+            echo "store dispatch from '$REF' by '$ACTOR'"
           fi
 
           if [[ -n "$VERSION" && "$DISTRIBUTION" != "store" ]]; then
@@ -745,6 +754,9 @@ jobs:
   android-release:
     name: Android release (Play testing tracks)
     runs-on: ubuntu-latest
+    # Inherits repository secrets and has no rules until configured in
+    # settings. See DEVELOPMENT.md "Release environment".
+    environment: release
     needs: [warm-sdk-linux]
     timeout-minutes: 45
     # Above the read-only default: attesting the distributable APK mints a
@@ -969,6 +981,8 @@ jobs:
   ios-release:
     name: iOS release (TestFlight)
     runs-on: macos-15
+    # See the note on android-release.
+    environment: release
     needs: [warm-sdk-macos, validate-inputs]
     timeout-minutes: 75
     # release-* tag push (paired with android-release + release-github) OR
