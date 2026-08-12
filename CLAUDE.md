@@ -548,6 +548,29 @@ maintainer pointer list.
   `signingConfig signingConfigs.release.storeFile ?
    signingConfigs.release : signingConfigs.debug`. Local
   smoke builds still produce installable APKs.
+- **R8 (`minifyEnabled true` on `release`)**: shrink + obfuscate +
+  optimize, using `proguard-android-optimize.txt` plus
+  `android/app/proguard-rules.pro`. Two rule groups are load-bearing:
+  - The Spark SDK AAR ships **no** consumer proguard rules and reaches
+    the Rust core through JNA, which resolves native functions,
+    `Structure` fields and callback interfaces by name at runtime.
+    `breez_sdk_spark.**`, `technology.breez.spark.**` and
+    `com.sun.jna.**` are kept whole. JNA also carries desktop AWT
+    helpers referencing `java.awt.*`, absent on Android, hence
+    `-dontwarn java.awt.**` (without it R8 hard-fails the build).
+  - Capacitor plugin classes need nothing here: `@capacitor/android`
+    ships `consumerProguardFiles` covering `@CapacitorPlugin` and
+    `extends com.getcapacitor.Plugin`, which reaches both in-house
+    plugins too. Verified in `mapping.txt` — every `*Plugin` class
+    keeps its original name.
+  - `shrinkResources` stays **off** on purpose: the splash plugin
+    resolves `splash_logo` by name from `capacitor.config.ts`, and
+    resource shrinking drops name-only references.
+  - The `debug` buildType minifies only when `MINIFY_DEBUG=true`, which
+    CI's `android-preview` job exports. Firebase preview APKs therefore
+    exercise the same R8 pass the release AAB does, so a wrong keep rule
+    surfaces on an internal tester's device rather than after a Play
+    upload. Local `make deploy-android` stays unminified and fast.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via

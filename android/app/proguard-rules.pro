@@ -5,17 +5,24 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Capacitor plugin classes (@CapacitorPlugin / extends Plugin) are kept by
+# @capacitor/android's own consumerProguardFiles, which covers the bundled
+# plugins AND the two in-house ones. Nothing to add here for those.
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# Spark SDK: the AAR ships no consumer rules and its UniFFI bindings talk to
+# the Rust core through JNA, which resolves native functions, Structure
+# fields and callback interfaces by name at runtime. Obfuscating any of it
+# breaks every SDK call with a runtime lookup failure, not a build error.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-keep class breez_sdk_spark.** { *; }
+-keep class technology.breez.spark.** { *; }
+# JNA is a desktop-JVM library; its AWT helpers reference java.awt.*, which
+# does not exist on Android. That code is unreachable here (Native$AWT is
+# only entered from desktop window handles), so the dangling refs are safe.
+-dontwarn java.awt.**
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Readable stack traces in Play vitals. gradle-play-publisher uploads
+# mapping.txt alongside the AAB, so Play deobfuscates automatically.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile

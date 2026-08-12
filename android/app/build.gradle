@@ -92,13 +92,29 @@ android {
             // install side-by-side on the same device.
             applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
+            // Off locally so `make deploy-android` stays fast and stack
+            // traces stay readable. CI's android-preview job exports
+            // MINIFY_DEBUG=true, so every Firebase preview APK runs the
+            // same R8 pass the release AAB does — a keep rule that turns
+            // out to be wrong surfaces on an internal tester's device
+            // rather than after a Play upload.
+            minifyEnabled System.getenv('MINIFY_DEBUG') == 'true'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             // Use the env-driven release config when populated,
             // fall back to debug signing for local smoke builds.
             signingConfig signingConfigs.release.storeFile ? signingConfigs.release : signingConfigs.debug
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // R8 shrink + obfuscate + optimize. Play Console flags an
+            // unoptimized bundle on every upload; the keep rules the SDK's
+            // JNA bindings need live in proguard-rules.pro.
+            //
+            // shrinkResources stays OFF deliberately: the splash plugin
+            // resolves `splash_logo` by name from capacitor.config.ts, and
+            // resource shrinking drops name-only references. A few hundred
+            // KB is not worth a drawable vanishing only in release.
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals
             // can symbolicate crashes in the Rust SDK libs (Play warns
             // on every upload without them). SYMBOL_TABLE gives
