@@ -43,15 +43,36 @@ jobs:
           # Keep .spark-sdk-ref in step with the web SDK: a vendored dep
           # records its source sha in vendor/SOURCE_COMMIT; an npm dep maps
           # to the spark-sdk tag of the same version.
+          #
+          # Check the value before it reaches a file, a sed replacement or a
+          # grep pattern. Absent is normal and skips the bump; malformed or
+          # unresolvable stops the run.
           DEP=$(node -p "require('./glow-web/package.json').dependencies['@breeztech/breez-sdk-spark']")
           if [[ "$DEP" == file:* ]]; then
-            SDK_SHA=$(cat glow-web/vendor/SOURCE_COMMIT 2>/dev/null || true)
+            SDK_SHA=$(tr -d '[:space:]' < glow-web/vendor/SOURCE_COMMIT 2>/dev/null || true)
           else
             VER=$(echo "$DEP" | sed 's/^[^0-9]*//')
-            SDK_SHA=$(gh api "repos/breez/spark-sdk/commits/$VER" --jq .sha 2>/dev/null || true)
+            if [[ "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              SDK_SHA=$(gh api "repos/breez/spark-sdk/commits/$VER" --jq .sha 2>/dev/null || true)
+            else
+              echo "::error::glow-web depends on '@breeztech/breez-sdk-spark': '$DEP', which is neither a file: path nor a MAJOR.MINOR.PATCH version. Refusing to guess an SDK pin from it."
+              exit 1
+            fi
           fi
+
+          if [ -n "$SDK_SHA" ]; then
+            if [[ ! "$SDK_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::SDK commit from glow-web is not a 40-character hex sha: '$SDK_SHA'. Refusing to write it to .spark-sdk-ref."
+              exit 1
+            fi
+            if ! gh api "repos/breez/spark-sdk/commits/$SDK_SHA" --jq .sha >/dev/null 2>&1; then
+              echo "::error::SDK commit '$SDK_SHA' from glow-web does not exist in breez/spark-sdk. Refusing to pin the native build to it."
+              exit 1
+            fi
+          fi
+
           SDK_NOTE=""
-          if [ -n "$SDK_SHA" ] && ! grep -q "^$SDK_SHA$" .spark-sdk-ref; then
+          if [ -n "$SDK_SHA" ] && ! grep -qxF "$SDK_SHA" .spark-sdk-ref; then
             sed -E -i "s/^[0-9a-f]{40}$/$SDK_SHA/" .spark-sdk-ref
             SDK_NOTE="
 
