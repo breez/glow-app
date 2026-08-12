@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Fail if any keystore, cert, or profile is tracked
         run: |
           set -euo pipefail
@@ -192,7 +192,7 @@ jobs:
     outputs:
       ios-cache-hit: ${{ steps.set-output.outputs.ios-cache-hit }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Read pinned SDK SHA
         id: sdk-sha
@@ -205,7 +205,7 @@ jobs:
       - name: Probe macOS SDK artifact cache
         id: probe
         continue-on-error: true
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           # Key must match warm-sdk-macos exactly (runner.os=macOS there,
           # hardcoded here since we're probing from Linux). The NDK segment
@@ -255,7 +255,7 @@ jobs:
         (contains(fromJSON('["android","both"]'), inputs.target) ||
          inputs.distribution != 'none')))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
       - uses: ./.github/actions/setup-glow-app
@@ -268,7 +268,7 @@ jobs:
           # pushes (cache warming), tags, and dispatches.
           platforms: ${{ github.event_name == 'pull_request' && 'wasm' || 'wasm,android' }}
           mode: warmer
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '21'
@@ -312,7 +312,7 @@ jobs:
        (github.event_name == 'workflow_dispatch' &&
         contains(fromJSON('["ios","both"]'), inputs.target)))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
       - run: sudo xcode-select -s /Applications/Xcode_26.3.app
@@ -341,7 +341,7 @@ jobs:
         inputs.distribution != 'none'))
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -375,7 +375,7 @@ jobs:
       - name: Unit tests
         run: cd glow-web && npm run test
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: web-test-results
@@ -397,7 +397,7 @@ jobs:
       inputs.distribution == 'none'
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -406,13 +406,13 @@ jobs:
           platforms: wasm,android
 
       - name: Setup JDK 21 (Capacitor 8 + AGP 8)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '21'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           # Falls back to an unencrypted shared cache when the secret is unset.
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
@@ -439,13 +439,13 @@ jobs:
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: glow-${{ github.sha }}-debug.apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 7
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: android-build-logs
@@ -478,7 +478,7 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'none'))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
 
@@ -524,7 +524,7 @@ jobs:
             build | tee xcodebuild.log
 
       - name: Upload xcodebuild log on failure
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: ios-build-log
@@ -559,7 +559,7 @@ jobs:
       P12_PASSWORD: ${{ secrets.IOS_PREVIEW_CERT_P12_PASSWORD }}
       PROVISIONING_PROFILE_BASE64: ${{ secrets.IOS_PREVIEW_PROFILE_BASE64 }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           # release-notes.sh walks release-* tags to find the prior release.
@@ -572,7 +572,7 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: '3.3'
           bundler-cache: true
@@ -638,7 +638,7 @@ jobs:
           bundle exec fastlane upload_firebase
 
       - name: Upload archive on failure
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: ios-preview-archive
@@ -661,7 +661,7 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'firebase'))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           # release-notes.sh walks release-* tags to find the prior release.
@@ -671,16 +671,16 @@ jobs:
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: '3.3'
           bundler-cache: true
@@ -732,7 +732,7 @@ jobs:
           export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
           bundle exec fastlane upload_firebase
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: android-preview-build-logs
@@ -764,7 +764,7 @@ jobs:
         contains(fromJSON('["android","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           # Full history so release-notes.sh can find the prior release-* tag.
@@ -774,18 +774,18 @@ jobs:
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: '21'
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
       # Fastlane drives only the universal-APK download below; the build and
       # the Play upload stay on Gradle.
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: '3.3'
           bundler-cache: true
@@ -905,7 +905,7 @@ jobs:
           done
 
       - name: Upload AAB artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # VERSION_NAME (populated by compute-version.sh) is always slash-
           # free — unlike github.ref_name, which on dispatch-from-branch runs
@@ -942,19 +942,19 @@ jobs:
       # compiled it. The Play signature is what proves authorship of the code.
       - name: Attest APK provenance
         if: ${{ !inputs.dry_run }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
         with:
           subject-path: build/glow-${{ env.VERSION_NAME }}.apk
 
       - name: Upload APK artifact
         if: ${{ !inputs.dry_run }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: glow-${{ env.VERSION_NAME }}-apk
           path: build/glow-${{ env.VERSION_NAME }}.apk
           retention-days: 30
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: android-release-build-logs
@@ -984,7 +984,7 @@ jobs:
         contains(fromJSON('["ios","both"]'), inputs.target) &&
         inputs.distribution == 'store'))
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
           # release-notes.sh needs full tag history.
@@ -997,7 +997,7 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_26.3.app
 
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
         with:
           ruby-version: '3.3'
           bundler-cache: true
@@ -1090,7 +1090,7 @@ jobs:
         run: bundle exec fastlane upload
 
       - name: Upload IPA artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # See android-release AAB comment above — VERSION_NAME is
           # slash-safe on dispatch-from-branch runs.
@@ -1098,7 +1098,7 @@ jobs:
           path: build/App.ipa
           retention-days: 30
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
           name: ios-release-archive
@@ -1128,12 +1128,12 @@ jobs:
       # softprops/action-gh-release needs write to mutate releases.
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
           # Matches glow-<version>-aab + glow-<version>-ipa from the two
@@ -1144,7 +1144,7 @@ jobs:
       - name: Compose release notes
         run: ./scripts/ci/release-notes.sh > RELEASE_NOTES.md
 
-      - uses: softprops/action-gh-release@v3
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
