@@ -860,6 +860,23 @@ rules → Add rule (pattern: `main`):
 - **Restrict who can push to `main`**: maintainers only.
 - **Do not allow bypassing the above settings**.
 
+### Reviewing the automated glow-web bump
+
+The daily bump PR moves the `glow-web` submodule and, when the web SDK
+dependency has moved, the `.spark-sdk-ref` pin that decides which SDK
+commit the native apps build against. The second one is easy to skim
+past, so it is worth a deliberate look.
+
+The workflow refuses to write a pin that is not a 40-character hex sha,
+and refuses one that does not resolve to a commit in `breez/spark-sdk`,
+so a malformed or stale value stops the run instead of opening a PR.
+That confirms the value resolves, not that it is the one intended.
+
+Two approvals on that PR covers the rest, and it is a settings change:
+add a rule for `chore/bump-glow-web` (or raise the `main` rule to 2)
+under Settings > Branches. When reviewing, confirm a `.spark-sdk-ref`
+change is one you were expecting rather than only that CI is green.
+
 Reproducible via `gh api --method PUT`:
 
 ```bash
