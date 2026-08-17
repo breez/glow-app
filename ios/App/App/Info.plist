@@ -20,6 +20,60 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<!-- Payment deep links, tracking Misty Breez minus the schemes Glow
+	     can't service, plus one it can.
+
+	     lnurlp / lnurlw / keyauth are the LUD-17 schemes. lnurlc
+	     (LNURL-channel) is deliberately absent even though Misty claims
+	     it: Glow has no channel flow, so taking the link would only
+	     dead-end it away from an app that can service it.
+
+	     bitcoin (BIP-21) goes the other way, claimed even though Misty
+	     doesn't, because Glow can actually settle one: the send sheet
+	     unwraps the URI to its underlying method and runs the on-chain
+	     flow.
+
+	     The uppercase duplicates are load-bearing, not noise: bech32 QR
+	     codes are commonly encoded all-caps for QR density, so real
+	     scanners hand off `LIGHTNING:LNBC...`, and iOS matches
+	     CFBundleURLSchemes case-sensitively. `glow` gets no uppercase
+	     twin because nothing QR-encodes it.
+
+	     The SDK's parser takes these URIs whole, scheme prefix included.
+	     `glow` is our own scheme and is stripped on the web side before
+	     parsing. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>technology.breez.glow.payments</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>lightning</string>
+				<string>bitcoin</string>
+				<string>lnurlp</string>
+				<string>lnurlw</string>
+				<string>keyauth</string>
+				<string>LIGHTNING</string>
+				<string>BITCOIN</string>
+				<string>LNURLP</string>
+				<string>LNURLW</string>
+				<string>KEYAUTH</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>technology.breez.glow</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>glow</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
