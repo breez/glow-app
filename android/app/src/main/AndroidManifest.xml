@@ -21,6 +21,41 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- Payment deep links. One filter covers every scheme: with
+                 only android:scheme set and no host/path, each <data> is an
+                 independent match, so the per-scheme filters Misty Breez
+                 spells out separately collapse into this block.
+
+                 lnurlp / lnurlw / keyauth are the LUD-17 schemes. lnurlc
+                 (LNURL-channel) is deliberately absent even though Misty
+                 claims it: Glow has no channel flow, so taking the link
+                 would only dead-end it away from an app that can service it.
+                 No android:autoVerify here either: it only means something
+                 for http/https App Links.
+
+                 bitcoin (BIP-21) goes further than Misty claims, because
+                 Glow can actually settle one: the send sheet unwraps the
+                 URI to its underlying method and runs the on-chain flow.
+
+                 The SDK's parser takes these URIs whole, scheme prefix
+                 included. `glow` is our own scheme and is stripped on the
+                 web side before parsing.
+
+                 Debug builds carry the .dev applicationId suffix, so a
+                 device with both installed shows a chooser. That's the
+                 intended behaviour, not a conflict. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="lightning" />
+                <data android:scheme="bitcoin" />
+                <data android:scheme="lnurlp" />
+                <data android:scheme="lnurlw" />
+                <data android:scheme="keyauth" />
+                <data android:scheme="glow" />
+            </intent-filter>
         </activity>
 
         <provider
