@@ -968,7 +968,7 @@ jobs:
       # compiled it. The Play signature is what proves authorship of the code.
       - name: Attest APK provenance
         if: ${{ !inputs.dry_run }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: build/glow-${{ env.VERSION_NAME }}.apk
 
