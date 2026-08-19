@@ -76,6 +76,15 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Queried by the Add funds from Cash App entry: canOpenURL answers
+	     false for any scheme not listed here, which would hide the entry
+	     with no error. Cash App publishes no scheme, so both the current
+	     name and the Square Cash-era one are declared and probed. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>cashme</string>
+		<string>squarecash</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
