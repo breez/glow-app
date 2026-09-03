@@ -21,7 +21,7 @@
     "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.3.0",
     "@capacitor/device": "^8.0.3",
-    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/filesystem": "^8.1.3",
     "@capacitor/haptics": "^8.0.2",
     "@capacitor/ios": "^8.3.0",
     "@capacitor/keyboard": "^8.0.5",
@@ -31,7 +31,7 @@
     "@capacitor/share": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
-    "@capgo/capacitor-navigation-bar": "^8.2.6",
+    "@capgo/capacitor-navigation-bar": "^8.2.7",
     "capacitor-native-vault": "file:plugins/capacitor-native-vault",
     "capacitor-passkey-prf": "file:plugins/capacitor-passkey-prf"
   },
