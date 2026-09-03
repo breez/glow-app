@@ -268,7 +268,7 @@ jobs:
           # pushes (cache warming), tags, and dispatches.
           platforms: ${{ github.event_name == 'pull_request' && 'wasm' || 'wasm,android' }}
           mode: warmer
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -406,7 +406,7 @@ jobs:
           platforms: wasm,android
 
       - name: Setup JDK 21 (Capacitor 8 + AGP 8)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -671,7 +671,7 @@ jobs:
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -774,7 +774,7 @@ jobs:
         with:
           platforms: wasm,android
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
