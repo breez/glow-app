@@ -784,6 +784,25 @@ Once H1–H8 (Play app, ASC app, upload keystore, iOS cert + app-store
 profile, ASC API key or legacy Apple ID creds, Firebase app ids)
 are in place:
 
+**Before tagging, bump glow-web's version to match.** The Settings
+label reads the shell's own version at runtime on native
+(`App.getInfo()`), so a native build can never disagree with the
+store listing. The web build has no shell to ask and falls back to
+`__APP_VERSION__`, injected by `vite.config.ts` from glow-web's
+`package.json` — nothing bumps that automatically, so it goes stale
+after a release unless you do this:
+
+1. In glow-web, set `version` in `package.json` and the two root
+   `version` entries in `package-lock.json` to `M.m.p` (leave
+   dependency entries alone).
+2. Land that on glow-web `main`.
+3. Bump the submodule pin here to that commit and land it on
+   glow-app `main`.
+
+Then bump `version` in glow-app's own `package.json` as part of the
+usual `chore(release):` commit. All three land before the tag, or the
+web build advertises the previous release.
+
 **Before tagging, wait for the post-merge main CI run to finish**
 (Actions → CI, event `push` on `main`). Every main push warms the
 SDK caches that tag builds restore from; tagging before that run
@@ -819,6 +838,9 @@ Verification checklist:
 - [ ] App Store Connect → TestFlight → Builds → new build
       "Ready to Test" after Apple processing (~15 min).
 - [ ] GitHub Releases → `release-0.X.Y` with both artifacts.
+- [ ] Settings, bottom of the page: the version reads `M.m.p` on the
+      TestFlight/Play build (from the shell) and on the deployed web
+      build (from glow-web's `package.json`).
 - [ ] Smoke test on physical device: passkey onboarding,
       biometric unlock, send/receive Lightning payment.
 
