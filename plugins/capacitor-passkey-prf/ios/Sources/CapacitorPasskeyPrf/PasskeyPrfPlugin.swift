@@ -62,7 +62,13 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             )
         )
         let config = call.getString("defaultLabel").map { PasskeyConfig(defaultLabel: $0) }
-        client = PasskeyClient(prfProvider: provider, breezApiKey: call.getString("breezApiKey"), config: config)
+        do {
+            client = try PasskeyClient(
+                prfProvider: provider, breezApiKey: call.getString("breezApiKey"), config: config)
+        } catch {
+            call.reject(error.localizedDescription, errorCode(error))
+            return
+        }
         call.resolve()
     }
 
@@ -317,6 +323,7 @@ public class PasskeyPlugin: CAPPlugin, CAPBridgedPlugin {
             // failed. Its own code so the web layer signs in with it
             // rather than offering a create that would strand it.
             case .CreatedButNotDerived: return "CREATED_BUT_NOT_DERIVED"
+            case .InvalidConfig: return "CONFIGURATION_ERROR"
             case .Generic: return "GENERIC_ERROR"
             }
         }

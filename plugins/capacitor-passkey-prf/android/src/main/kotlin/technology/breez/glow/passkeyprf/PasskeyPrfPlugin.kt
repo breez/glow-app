@@ -101,7 +101,12 @@ class PasskeyPlugin : Plugin() {
             ),
         )
         val config = call.getString("defaultLabel")?.let { PasskeyConfig(defaultLabel = it) }
-        client = PasskeyClient(provider, call.getString("breezApiKey"), config)
+        client = try {
+            PasskeyClient(provider, call.getString("breezApiKey"), config)
+        } catch (e: PasskeyException) {
+            call.reject(e.message ?: "initialize failed", errorCode(e))
+            return
+        }
         call.resolve()
     }
 
@@ -377,6 +382,7 @@ class PasskeyPlugin : Plugin() {
         // Its own code so the web layer signs in with it rather than
         // offering a create that would strand it.
         is PasskeyException.CreatedButNotDerived -> "CREATED_BUT_NOT_DERIVED"
+        is PasskeyException.InvalidConfig -> "CONFIGURATION_ERROR"
         is PasskeyException.Generic -> "GENERIC_ERROR"
     }
 
