@@ -719,9 +719,12 @@ on `preview-*` / `rc-*`:
   TestFlight upload auth. Same `fetch-depth: 0` for release
   notes.
 - `release-github` — `needs: [android-release, ios-release]`,
-  downloads both artifacts, publishes a GitHub Release with
-  the AAB + IPA + git-log changelog. `permissions: contents:
-  write` for the release write.
+  downloads both artifacts, DRAFTS a GitHub Release with the
+  AAB + IPA + changelog. `permissions: contents: write` for
+  the release write. Drafted rather than published because
+  both store rollouts stay manual, and publishing is also
+  what releases the universal APK to Obtainium and Zapstore
+  — see the comment on the step.
 
 ### Branch protection unchanged
 

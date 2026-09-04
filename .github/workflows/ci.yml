@@ -1138,7 +1138,7 @@ jobs:
   # release-* tag push — target=both distribution=store dispatches build
   # the same artifacts but don't publish (no tag to attach to).
   release-github:
-    name: Publish GitHub Release
+    name: Draft GitHub Release
     needs: [android-release, ios-release]
     runs-on: ubuntu-latest
     # `!cancelled()` + explicit == 'success' on both upstreams — the
@@ -1170,6 +1170,15 @@ jobs:
       - name: Compose release notes
         run: ./scripts/ci/release-notes.sh > RELEASE_NOTES.md
 
+      # Drafted, not published. A release tag's job is to put builds in
+      # front of testers on TestFlight and the Play testing tracks; both
+      # store rollouts stay manual, so nothing here is approved for
+      # production the moment the tag lands. Publishing is also what
+      # reaches sideload users — Obtainium and Zapstore poll releases for
+      # the Play-signed universal APK attached below, and a draft is
+      # invisible to them. Publish by hand once production is rolled out;
+      # that is where the "latest release" choice gets made, because
+      # make_latest below does not apply while the release is a draft.
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
@@ -1179,5 +1188,6 @@ jobs:
             artifacts/**/*.aab
             artifacts/**/*.apk
             artifacts/**/*.ipa
+          draft: true
           prerelease: false
           make_latest: true
