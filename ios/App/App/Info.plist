@@ -6,6 +6,17 @@
 	<string>$(CAPACITOR_DEBUG)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<key>CFBundleLocalizations</key>
+	<!-- Languages Glow tells iOS and the App Store it supports. Must list exactly
+	     glow-web/src/locales/shipping.json: anything more is advertised on the
+	     product page and offered in the per-app language picker, then rendered in
+	     English, because the web layer will not serve an unreviewed translation.
+	     Note that an .lproj folder in the bundle declares a language on its own,
+	     so localized permission strings are added at the same time as an entry
+	     here, never before. -->
+	<array>
+		<string>en</string>
+	</array>
 	<key>CFBundleDisplayName</key>
         <string>Glow</string>
 	<key>CFBundleExecutable</key>

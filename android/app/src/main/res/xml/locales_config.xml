@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Languages Glow tells Android it supports. Android 13 and later reads this to
+    build the per-app language picker in system Settings, and the choice it
+    writes is what Device.getLanguageTag() reports back to the web layer.
+
+    It must list exactly the languages in glow-web/src/locales/shipping.json.
+    Listing more would put a language in the picker that Glow then renders in
+    English, because the web layer refuses to serve a translation nobody has
+    reviewed. scripts/ci/check-locale-declarations.sh fails the build if the two
+    disagree.
+-->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+</locale-config>
