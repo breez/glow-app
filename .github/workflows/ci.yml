@@ -334,6 +334,15 @@ jobs:
         with:
           submodules: recursive
 
+      # Before the SDK setup: it needs nothing but the checkout, takes a
+      # couple of seconds, and catches a class of mistake nothing else does.
+      # A language declared to iOS or Android but not served by glow-web is
+      # offered in the OS picker and then rendered in English.
+      - name: Locale declarations match the shipping list
+        run: |
+          scripts/ci/check-locale-declarations.sh
+          scripts/ci/check-locale-declarations.test.sh
+
       - uses: ./.github/actions/setup-glow-app
         with:
           platforms: wasm

@@ -287,6 +287,39 @@ between `UnlockingPage` rendering and `retryUnlock` firing):
   `initialInnerHeight - keyboardHeight` from the plugin event.
   That computation double-subtracts the nav bar and leaves a gap.
 
+### Locale declarations
+
+Which languages Glow claims to support is declared in three places that are
+read by different things and drift silently:
+
+- `glow-web/src/locales/shipping.json` — the languages the web layer will
+  actually serve. Everything else falls back to English, by design: an
+  unreviewed translation is worse than none.
+- `android/app/src/main/res/xml/locales_config.xml`, referenced from
+  `AndroidManifest.xml` via `android:localeConfig`. Android 13+ builds its
+  per-app language picker from this, and the choice it writes is what
+  `Device.getLanguageTag()` reports back to the web layer.
+- `CFBundleLocalizations` in `ios/App/App/Info.plist`. iOS builds its per-app
+  picker from this, and the App Store lists these languages on the product
+  page.
+
+All three must match. Declaring a language natively that glow-web will not
+serve produces a language someone can select and then read in English, which
+looks like a broken translation rather than an absent one.
+
+`scripts/ci/check-locale-declarations.sh` fails the build on either direction
+of drift, and runs in the `web` job before the SDK setup. Its own tests are in
+`check-locale-declarations.test.sh` (bash, no framework, a couple of seconds).
+
+Adding a language is therefore two commits in the usual order: the glow-web PR
+adds the translation and the `shipping.json` entry, then the app PR bumps the
+submodule pin and adds the same entry to both native files.
+
+An `.lproj` folder declares its language to iOS by existing, with or without a
+plist entry, so localized permission strings (`InfoPlist.strings`) are added at
+the same time as the `CFBundleLocalizations` entry, never ahead of it. The
+check enforces that too.
+
 ### Standalone web compatibility
 
 Every native-only code path is guarded by
