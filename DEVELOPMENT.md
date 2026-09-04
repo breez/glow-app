@@ -240,7 +240,6 @@ or `gh workflow run`:
 | `distribution` | `none` \| `firebase` \| `store` | yes | `none` = unsigned compile/debug build, no upload. `firebase` = ad-hoc/debug → Firebase App Distribution (`.dev` bundle). `store` = app-store-signed → TestFlight (iOS) + Play internal/closed/open testing (Android). |
 | `version` | `MAJOR.MINOR.PATCH` | only when `distribution=store` | Marketing version (e.g. `0.0.2`). Must match semver regex. |
 | `dry_run` | `true` \| `false` | no (default `false`) | Only meaningful for `distribution=store`. Builds + signs + assembles artifacts but skips the TestFlight / Play upload step. Use to verify a release pipeline end-to-end without shipping. |
-| `ios_enable_buy` | `true` \| `false` | no (default `false`) | Buy Bitcoin is on by default in every build; iOS store builds disable it via `VITE_IOS_DISABLE_BUY=true` for App Review Guideline 3.1.5(iii). This toggle keeps the button in a store build — TestFlight open-beta only, never submit such a build for App Store review. `release-*` tag builds always disable it. |
 
 **Preset scenarios** (old `job` enum → new input combo)
 
