@@ -76,6 +76,19 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- Schemes canOpenURL is allowed to ask about. iOS answers false for
+	     anything not declared here, whatever is actually installed, and
+	     reports no error — so without this list glow-web's Cash App probe
+	     (src/hooks/useCashAppInstalled.ts) silently decides Cash App is
+	     absent and hides the entry on every device. Cash App publishes no
+	     scheme of its own, so both the widely cited `cashme` and the Square
+	     Cash-era `squarecash` are declared and the probe takes whichever
+	     answers first. Apple caps this list at 50 entries; we use two. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>cashme</string>
+		<string>squarecash</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
