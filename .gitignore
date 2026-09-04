@@ -3,7 +3,7 @@ dist/
 
 # Capacitor native build artifacts
 ios/App/Pods/
-android/.gradle/
+.gradle/
 android/app/build/
 android/build/
 android/.idea/
