@@ -217,7 +217,7 @@ Current model:
 |---|---|---|
 | PR open/push | `web` only — tsc + lint + vitest + `cap doctor` + glow-web-submodule-pushed-to-origin check | ~3–5 min Linux |
 | Push to `main` | **nothing** — admin-merged PRs already passed their gate | 0 |
-| `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB to Play internal + closed + open testing) + `ios-release` (IPA → TestFlight) + `release-github` (GH Release) | ~450 min |
+| `release-*` tag push | Full release pipeline: warm-sdk-{linux,macos} + `web` + `android-release` (AAB to Play internal + closed + open testing) + `ios-release` (IPA → TestFlight) + `release-github` (draft GH Release) | ~450 min |
 | `preview-*` / `rc-*` tag push | Firebase App Distribution: warm-sdk-{linux,macos} + `web` + `ios-preview` + `android-preview` | ~250 min |
 | `workflow_dispatch` | Dev picks `target` × `distribution` × `version` × `dry_run` inputs (see table below) | varies |
 
@@ -805,8 +805,12 @@ CI then runs:
 2. `android-release` — Gradle bundleRelease + Play upload.
 3. `ios-release` — `import-ios-cert.sh` + `build-ios-ipa.sh Release app-store` + `fastlane upload` → TestFlight.
 4. `release-github` — downloads the AAB + IPA artifacts,
-   composes release notes from `git log` between this and
-   the previous `release-*` tag, publishes a GitHub Release.
+   composes release notes from the annotated tag message (or
+   from `git log` between this and the previous `release-*`
+   tag when the tag carries none), and creates the GitHub
+   Release as a **draft**. Publish it by hand once the store
+   rollouts are approved: publishing is what hands the
+   Play-signed universal APK to Obtainium and Zapstore.
 
 Verification checklist:
 
