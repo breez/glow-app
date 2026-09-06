@@ -54,3 +54,4 @@ Thumbs.db
 *.jks
 *.keystore
 play-service-account.json
+.planning/debug/
