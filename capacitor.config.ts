@@ -113,6 +113,11 @@ const config: CapacitorConfig = {
     // calls, so glow-web strips it app-side
     // (glow-web/src/utils/stripUserAgentFetch.ts) until the SDK drops those
     // too.
+    //
+    // `enabled: false` only turns off the global fetch patch; the plugin
+    // stays callable. glow-web calls it directly for the SDK's LNURL
+    // callbacks (glow-web/src/services/sdkConnect.ts), since LNURL services
+    // built for native apps often send no CORS headers.
     CapacitorHttp: {
       enabled: false,
     },
