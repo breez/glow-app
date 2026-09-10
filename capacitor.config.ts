@@ -107,12 +107,12 @@ const config: CapacitorConfig = {
     // (binary bodies / responses), breaking Lightning invoice and Bitcoin
     // address generation on iOS.
     //
-    // The narrower, correct fix is app-side: glow-web strips the custom
-    // User-Agent from outgoing requests (src/utils/stripUserAgentFetch.ts),
-    // so every cross-origin request stays CORS-simple on all engines
-    // (WebKit, Firefox, Chromium) over plain fetch, with no native routing.
-    // That fixes the blockstream preflight AND any other CORS-strict host
-    // (LNURL / Lightning-address hosts) without touching operator traffic.
+    // Keep it off. The SDK stopped setting the User-Agent on its plain HTTP
+    // client in the browser in 0.17.0, which fixed the blockstream lookups
+    // at the source. It still sets it on its gRPC-web and Lightning-address
+    // calls, so glow-web strips it app-side
+    // (glow-web/src/utils/stripUserAgentFetch.ts) until the SDK drops those
+    // too.
     CapacitorHttp: {
       enabled: false,
     },
