@@ -91,12 +91,9 @@ android {
             // install side-by-side on the same device.
             applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
-            // Off locally so `make deploy-android` stays fast and stack
-            // traces stay readable. CI's android-preview job exports
-            // MINIFY_DEBUG=true, so every Firebase preview APK runs the
-            // same R8 pass the release AAB does — a keep rule that turns
-            // out to be wrong surfaces on an internal tester's device
-            // rather than after a Play upload.
+            // Off locally for speed and readable traces. android-preview
+            // sets MINIFY_DEBUG=true so previews run the release R8 pass
+            // and a bad keep rule fails on a tester, not after upload.
             minifyEnabled System.getenv('MINIFY_DEBUG') == 'true'
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -121,18 +118,9 @@ android {
             } else if (!System.getenv('CI')) {
                 signingConfig signingConfigs.debug
             }
-            // R8 shrink + obfuscate + optimize. Play Console flags an
-            // unoptimized bundle on every upload; the keep rules the SDK's
-            // JNA bindings need live in proguard-rules.pro.
-            //
-            // shrinkResources stays OFF deliberately. res/ is 0.63 MB of
-            // a 102 MB APK against 85 MB of native libs, so the ceiling is
-            // a couple of hundred KB, and Play's optimization threshold
-            // counts DEX only, so it earns nothing there either. Against
-            // that, the splash plugin resolves `splash_logo` by name from
-            // capacitor.config.ts and resource shrinking drops name-only
-            // references — not worth a drawable that vanishes only in
-            // release.
+            // Keep rules for the SDK's JNA bindings are in
+            // proguard-rules.pro. shrinkResources stays off: res/ is 0.6%
+            // of the APK and `splash_logo` resolves by name.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals
@@ -141,23 +129,10 @@ android {
             // function-level stacks without FULL's DWARF size cost.
             ndk {
                 debugSymbolLevel 'SYMBOL_TABLE'
-                // ARM only, for the sideload path. Play splits an AAB per
-                // ABI, so a store install was never paying for the others
-                // — but the universal APK that Obtainium and Zapstore
-                // serve carries every ABI in one file, and x86 + x86_64
-                // are 49 MB of the 85 MB of native libs there. Nothing
-                // with a phone can load them. Dropping them, and the dead
-                // mips / mips64 / armeabi that JNA still ships, halves
-                // that download.
-                //
-                // The cost is x86 Chromebooks: once an AAB without those
-                // ABIs is live, Play stops offering the app to them, and
-                // an existing x86 install stops receiving updates. Taken
-                // deliberately — sideload size matters more to us.
-                //
-                // Release only. `debug` keeps every ABI so an x86_64
-                // emulator can still install it; CI runs no instrumented
-                // tests, so nothing there depends on these.
+                // Play splits an AAB per ABI, but the universal APK the
+                // sideload channels serve carries all of them: x86/x86_64
+                // were 49 MB of 85 MB, unusable on a phone. Costs x86
+                // Chromebooks. `debug` stays unfiltered for emulators.
                 abiFilters 'arm64-v8a', 'armeabi-v7a'
             }
         }
