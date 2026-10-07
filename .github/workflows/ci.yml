@@ -728,6 +728,17 @@ jobs:
           export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
           bundle exec fastlane upload_firebase
 
+      # Preview APKs are minified too (MINIFY_DEBUG above), so a stack
+      # trace a tester sends back is obfuscated. Nothing symbolicates a
+      # Firebase build for us, so keep the map next to the run.
+      - name: Upload R8 mapping artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: glow-preview-${{ github.run_number }}-mapping
+          path: android/app/build/outputs/mapping/debug/mapping.txt
+          retention-days: 30
+          if-no-files-found: error
+
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
