@@ -5,17 +5,20 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Plugin classes come from @capacitor/android's consumerProguardFiles.
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
+# UniFFI reaches the Rust core through JNA, which looks up native symbols,
+# Structure field names and callbacks by name. Only that bridge is
+# name-sensitive; `implements` means "assignable to", so this also covers
+# Structure subclasses. Do NOT widen to breez_sdk_spark.** — that holds
+# ~3,000 classes back and drops obfuscation under Play's 2027 floor.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# JNA's desktop AWT helpers reference java.awt.*, absent on Android.
+# R8 fails the build without this.
+-dontwarn java.awt.**
+
+# Readable traces in Play vitals. AGP embeds the mapping in the AAB.
+-keepattributes SourceFile,LineNumberTable
+-renamesourcefileattribute SourceFile
