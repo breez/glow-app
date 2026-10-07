@@ -480,6 +480,10 @@ Phase 4B is structured to minimize macOS usage within the
 Breez-org's plan quota:
 
 - iOS PRs are **label-gated**.
+- The unsigned `ios` check runs on the `xcode-27` preview label —
+  same spec and price as `macos-15`, and it throws its build away, so
+  a preview image that breaks or queues costs only that check. The
+  preview and release jobs stay on `macos-15` until it is GA.
 - iOS preview runs only on **preview-* tags** (and manual
   dispatch), not on every main push.
 - Android + web run on ubuntu (1x).
