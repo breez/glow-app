@@ -125,10 +125,14 @@ android {
             // unoptimized bundle on every upload; the keep rules the SDK's
             // JNA bindings need live in proguard-rules.pro.
             //
-            // shrinkResources stays OFF deliberately: the splash plugin
-            // resolves `splash_logo` by name from capacitor.config.ts, and
-            // resource shrinking drops name-only references. A few hundred
-            // KB is not worth a drawable vanishing only in release.
+            // shrinkResources stays OFF deliberately. res/ is 0.63 MB of
+            // a 102 MB APK against 85 MB of native libs, so the ceiling is
+            // a couple of hundred KB, and Play's optimization threshold
+            // counts DEX only, so it earns nothing there either. Against
+            // that, the splash plugin resolves `splash_logo` by name from
+            // capacitor.config.ts and resource shrinking drops name-only
+            // references — not worth a drawable that vanishes only in
+            // release.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals
@@ -137,6 +141,24 @@ android {
             // function-level stacks without FULL's DWARF size cost.
             ndk {
                 debugSymbolLevel 'SYMBOL_TABLE'
+                // ARM only, for the sideload path. Play splits an AAB per
+                // ABI, so a store install was never paying for the others
+                // — but the universal APK that Obtainium and Zapstore
+                // serve carries every ABI in one file, and x86 + x86_64
+                // are 49 MB of the 85 MB of native libs there. Nothing
+                // with a phone can load them. Dropping them, and the dead
+                // mips / mips64 / armeabi that JNA still ships, halves
+                // that download.
+                //
+                // The cost is x86 Chromebooks: once an AAB without those
+                // ABIs is live, Play stops offering the app to them, and
+                // an existing x86 install stops receiving updates. Taken
+                // deliberately — sideload size matters more to us.
+                //
+                // Release only. `debug` keeps every ABI so an x86_64
+                // emulator can still install it; CI runs no instrumented
+                // tests, so nothing there depends on these.
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
             }
         }
     }
