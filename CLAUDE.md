@@ -558,85 +558,27 @@ maintainer pointer list.
   expected certificate at all is itself a failure. Covered by
   `scripts/ci/verify-aab-signature.test.sh` (needs a JDK, runs
   in a couple of seconds, no framework).
-- **R8 (`minifyEnabled true` on `release`)**: shrink + obfuscate +
-  optimize, using `proguard-android-optimize.txt` plus
-  `android/app/proguard-rules.pro`. Not optional for much longer: from
-  February 2027 Play requires at least 25% optimization, shrinking and
-  obfuscation of DEX for any app shipping more than 10 MB of it, and this
-  app's DEX was 15.1 MB unminified. R8 **full mode** has been the default
-  since AGP 8.0, so there is no half-measure here: default constructors
-  are not implicitly kept and annotations survive only on explicitly
-  matched items. Two rule groups are load-bearing:
-  - The Spark SDK AAR ships **no** consumer proguard rules and reaches
-    the Rust core through JNA, which resolves native functions,
-    `Structure` fields and callback interfaces by name at runtime.
-    Only the generated FFI scaffolding is name-sensitive — `UniffiLib`
-    (method names are the native symbols), the `Structure` subclasses
-    (JNA reads field names reflectively, `getFieldOrder()` returns them
-    as strings) and the `Callback` interfaces. That is **219 classes**,
-    matched by `-keep class * implements com.sun.jna.**` plus
-    `com.sun.jna.**` itself. ProGuard reads `implements` as "assignable
-    to", so that one rule covers `extends Structure` too.
-    **Do not widen this back to `breez_sdk_spark.**` /
-    `technology.breez.spark.**`.** Keeping those packages whole held
-    3,269 classes back and left class-level obfuscation at 31.9%, which
-    is under Play's 25% floor once measured by bytes instead of class
-    count; matching the JNA surface instead gives 80.2% and halves the
-    DEX (3.67 MB to 2.09 MB). The ~2,900 remaining SDK classes are
-    ordinary Kotlin data classes, enums and converters called directly
-    from Kotlin, so R8 renames both sides together. Verified against the
-    AAR: no `Class.forName`, no `getDeclaredField` / `getDeclaredMethod`,
-    no kotlinx.serialization. The only reflective call is `getSimpleName`
-    inside UniFFI's `callWithPointer` lambdas, which feeds a diagnostic
-    string. JNA also carries desktop AWT helpers referencing
-    `java.awt.*`, absent on Android, hence `-dontwarn java.awt.**`
-    (without it R8 hard-fails the build).
-  - Capacitor plugin classes need nothing here: `@capacitor/android`
-    ships `consumerProguardFiles` covering `@CapacitorPlugin` and
-    `extends com.getcapacitor.Plugin`, which reaches both in-house
-    plugins too. Verified in `mapping.txt` — every `*Plugin` class
-    keeps its original name.
-  - `shrinkResources` stays **off** on purpose, and measurement backs
-    it: `res/` is 0.63 MB of a 102 MB APK (0.6%), against 85 MB of
-    native libs, so the ceiling is a couple of hundred KB. It also
-    contributes nothing to Play's threshold, which counts DEX only.
-    Against that, the splash plugin resolves `splash_logo` by name from
-    `capacitor.config.ts` and resource shrinking drops name-only
-    references, so turning it on buys noise and risks a drawable that
-    vanishes only in release.
-  - The `debug` buildType minifies only when `MINIFY_DEBUG=true`, which
-    CI's `android-preview` job exports. Firebase preview APKs therefore
-    exercise the same R8 pass the release AAB does, so a wrong keep rule
-    surfaces on an internal tester's device rather than after a Play
-    upload. Local `make deploy-android` stays unminified and fast.
-  - Play gets the mapping on its own: AGP embeds it in the AAB at
-    `BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map`
-    and Play reads it on upload. Do not reach for a GPP setting to send
-    it — GPP wires a mapping only on its APK publish path, and we publish
-    a bundle. A sideloaded build (Obtainium / Zapstore) has no such
-    channel, so a crash report from one stays obfuscated; the mapping for
-    a given release is uploaded by `android-release` as a
-    `glow-<version>-mapping` artifact, kept 90 days because a stack
-    trace can surface long after the release it came from.
-  - **AGP 9 is out (9.0.1, January 2026) and we are still on 8.13.2**,
-    because gradle-play-publisher 4.x is what needs AGP 9 and we pin GPP
-    3.x. Two things to know when that upgrade happens: AGP 9 *rejects*
-    `proguard-android.txt` and requires the `-optimize` variant, which is
-    already what this build uses, and AGP 9.3 replaces `minifyEnabled`
-    with an `optimization { enable = true }` block. Neither changes
-    anything for AGP 8 — do not pre-migrate the DSL here.
-- **ABI filtering (`release` only)**: `abiFilters 'arm64-v8a',
-  'armeabi-v7a'`. Play splits an AAB per ABI, so a store install never
-  paid for the others, but the universal APK that Obtainium and Zapstore
-  serve carries every ABI in one file. x86 + x86_64 were 49 MB of the
-  85 MB of native libs there, and JNA adds dead mips / mips64 / armeabi
-  on top. Filtering takes the release APK from 102.45 MB to 52.95 MB
-  uncompressed (44.7 MB on disk). The accepted cost is x86 Chromebooks:
-  once an AAB without those ABIs is live, Play stops offering the app to
-  them and existing x86 installs stop getting updates — a deliberate
-  trade for sideload size. `debug` is deliberately unfiltered so an
-  x86_64 emulator can still install it; CI runs no instrumented tests,
-  so nothing there depends on it.
+- **R8 (`minifyEnabled true` on `release`)**: via
+  `proguard-android-optimize.txt` + `android/app/proguard-rules.pro`.
+  Play requires 25% DEX optimization/shrinking/obfuscation from February
+  2027 above 10 MB of DEX. Full mode is AGP's default since 8.0.
+  - **Do not widen the SDK keep rules** past the JNA bridge (219
+    classes). Package-wide keeps hold ~3,000 back and drop obfuscation
+    from 80% to 32%, under the Play floor.
+  - Capacitor's `consumerProguardFiles` covers all plugin classes.
+  - `shrinkResources` off: `splash_logo` resolves by name, and `res/` is
+    0.6% of the APK.
+  - `debug` minifies only under `MINIFY_DEBUG=true`, set by
+    `android-preview`, so previews exercise the release R8 pass.
+  - Play reads the mapping from inside the AAB; GPP uploads one only on
+    its APK path. Both Android jobs keep it as an artifact for sideload.
+  - AGP 8.13.2 because GPP 4.x needs AGP 9. AGP 9 rejects
+    `proguard-android.txt`; 9.3 swaps `minifyEnabled` for
+    `optimization {}`. Do not pre-migrate.
+- **ABI filtering (`release` only)**: `arm64-v8a` + `armeabi-v7a`. Play
+  splits an AAB per ABI, but the sideload universal APK carries all of
+  them, and x86/x86_64 were 49 MB of 85 MB. Costs x86 Chromebooks.
+  `debug` stays unfiltered for emulators.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via
