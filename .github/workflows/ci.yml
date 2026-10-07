@@ -447,7 +447,12 @@ jobs:
 
   ios:
     name: iOS (xcodebuild, unsigned)
-    runs-on: macos-15
+    # Xcode 27 preview image, arm64, same spec and price as macos-15. Only
+    # this job: it compiles and throws the result away, so a preview image
+    # that breaks or queues costs a label-gated PR check and nothing else.
+    # ios-preview and ios-release stay on macos-15 until this label is GA.
+    # The macOS SDK cache keys on runner.os, so it restores across both.
+    runs-on: xcode-27
     needs: [warm-sdk-macos, validate-inputs]
     timeout-minutes: 60
     # Unsigned compile-check. PRs opt in via `run-ios` label. Does NOT fire
