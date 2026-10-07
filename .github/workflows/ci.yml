@@ -691,10 +691,9 @@ jobs:
         run: ./scripts/ci/compute-version.sh
 
       - name: Gradle assembleDebug
-        # MINIFY_DEBUG runs R8 over the preview APK with the same rules the
-        # release AAB uses, so a missing keep rule fails on a tester's
-        # device instead of after a Play upload. Still the debug keystore +
-        # `.dev` id, so it installs alongside a store build as before.
+        # Runs the release R8 pass over the preview APK, so a missing keep
+        # rule fails on a tester rather than after a Play upload. Still the
+        # debug keystore + `.dev` id, so side-by-side install is unchanged.
         env:
           MINIFY_DEBUG: 'true'
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
@@ -728,9 +727,8 @@ jobs:
           export RELEASE_NOTES="$(cat "$RELEASE_NOTES_FILE")"
           bundle exec fastlane upload_firebase
 
-      # Preview APKs are minified too (MINIFY_DEBUG above), so a stack
-      # trace a tester sends back is obfuscated. Nothing symbolicates a
-      # Firebase build for us, so keep the map next to the run.
+      # Previews are minified too, and nothing symbolicates a Firebase
+      # build, so keep the map beside the run for tester traces.
       - name: Upload R8 mapping artifact
         uses: actions/upload-artifact@v7
         with:
@@ -947,13 +945,9 @@ jobs:
           path: android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-      # Play reads the mapping straight out of the bundle (AGP embeds it at
-      # BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map),
-      # so Play vitals needs nothing from here. This copy is for the paths
-      # Play does not cover: a crash report from a sideloaded build
-      # (Obtainium, Zapstore) arrives obfuscated with nowhere to resolve it.
-      # Kept longer than the binaries because a stack trace can show up well
-      # after the release it came from.
+      # Play reads its own copy from inside the bundle. This one is for
+      # sideloaded builds, whose crash reports have nothing to resolve
+      # against. Kept longer than the binaries — traces arrive late.
       - name: Upload R8 mapping artifact
         uses: actions/upload-artifact@v7
         with:
