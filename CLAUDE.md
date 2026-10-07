@@ -625,6 +625,18 @@ maintainer pointer list.
     already what this build uses, and AGP 9.3 replaces `minifyEnabled`
     with an `optimization { enable = true }` block. Neither changes
     anything for AGP 8 — do not pre-migrate the DSL here.
+- **ABI filtering (`release` only)**: `abiFilters 'arm64-v8a',
+  'armeabi-v7a'`. Play splits an AAB per ABI, so a store install never
+  paid for the others, but the universal APK that Obtainium and Zapstore
+  serve carries every ABI in one file. x86 + x86_64 were 49 MB of the
+  85 MB of native libs there, and JNA adds dead mips / mips64 / armeabi
+  on top. Filtering takes the release APK from 102.45 MB to 52.95 MB
+  uncompressed (44.7 MB on disk). The accepted cost is x86 Chromebooks:
+  once an AAB without those ABIs is live, Play stops offering the app to
+  them and existing x86 installs stop getting updates — a deliberate
+  trade for sideload size. `debug` is deliberately unfiltered so an
+  x86_64 emulator can still install it; CI runs no instrumented tests,
+  so nothing there depends on it.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via
