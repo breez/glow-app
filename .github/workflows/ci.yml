@@ -936,6 +936,21 @@ jobs:
           path: android/app/build/outputs/bundle/release/app-release.aab
           retention-days: 30
 
+      # Play reads the mapping straight out of the bundle (AGP embeds it at
+      # BUNDLE-METADATA/com.android.tools.build.obfuscation/proguard.map),
+      # so Play vitals needs nothing from here. This copy is for the paths
+      # Play does not cover: a crash report from a sideloaded build
+      # (Obtainium, Zapstore) arrives obfuscated with nowhere to resolve it.
+      # Kept longer than the binaries because a stack trace can show up well
+      # after the release it came from.
+      - name: Upload R8 mapping artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: glow-${{ env.VERSION_NAME }}-mapping
+          path: android/app/build/outputs/mapping/release/mapping.txt
+          retention-days: 90
+          if-no-files-found: error
+
       # Sideload distribution (Obtainium, Zapstore) ships the universal APK
       # Play generates from the bundle we just uploaded, rather than a second
       # build signed by us. It therefore carries the same certificate as the

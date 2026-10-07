@@ -570,18 +570,40 @@ maintainer pointer list.
   - The Spark SDK AAR ships **no** consumer proguard rules and reaches
     the Rust core through JNA, which resolves native functions,
     `Structure` fields and callback interfaces by name at runtime.
-    `breez_sdk_spark.**`, `technology.breez.spark.**` and
-    `com.sun.jna.**` are kept whole. JNA also carries desktop AWT
-    helpers referencing `java.awt.*`, absent on Android, hence
-    `-dontwarn java.awt.**` (without it R8 hard-fails the build).
+    Only the generated FFI scaffolding is name-sensitive — `UniffiLib`
+    (method names are the native symbols), the `Structure` subclasses
+    (JNA reads field names reflectively, `getFieldOrder()` returns them
+    as strings) and the `Callback` interfaces. That is **219 classes**,
+    matched by `-keep class * implements com.sun.jna.**` plus
+    `com.sun.jna.**` itself. ProGuard reads `implements` as "assignable
+    to", so that one rule covers `extends Structure` too.
+    **Do not widen this back to `breez_sdk_spark.**` /
+    `technology.breez.spark.**`.** Keeping those packages whole held
+    3,269 classes back and left class-level obfuscation at 31.9%, which
+    is under Play's 25% floor once measured by bytes instead of class
+    count; matching the JNA surface instead gives 80.2% and halves the
+    DEX (3.67 MB to 2.09 MB). The ~2,900 remaining SDK classes are
+    ordinary Kotlin data classes, enums and converters called directly
+    from Kotlin, so R8 renames both sides together. Verified against the
+    AAR: no `Class.forName`, no `getDeclaredField` / `getDeclaredMethod`,
+    no kotlinx.serialization. The only reflective call is `getSimpleName`
+    inside UniFFI's `callWithPointer` lambdas, which feeds a diagnostic
+    string. JNA also carries desktop AWT helpers referencing
+    `java.awt.*`, absent on Android, hence `-dontwarn java.awt.**`
+    (without it R8 hard-fails the build).
   - Capacitor plugin classes need nothing here: `@capacitor/android`
     ships `consumerProguardFiles` covering `@CapacitorPlugin` and
     `extends com.getcapacitor.Plugin`, which reaches both in-house
     plugins too. Verified in `mapping.txt` — every `*Plugin` class
     keeps its original name.
-  - `shrinkResources` stays **off** on purpose: the splash plugin
-    resolves `splash_logo` by name from `capacitor.config.ts`, and
-    resource shrinking drops name-only references.
+  - `shrinkResources` stays **off** on purpose, and measurement backs
+    it: `res/` is 0.63 MB of a 102 MB APK (0.6%), against 85 MB of
+    native libs, so the ceiling is a couple of hundred KB. It also
+    contributes nothing to Play's threshold, which counts DEX only.
+    Against that, the splash plugin resolves `splash_logo` by name from
+    `capacitor.config.ts` and resource shrinking drops name-only
+    references, so turning it on buys noise and risks a drawable that
+    vanishes only in release.
   - The `debug` buildType minifies only when `MINIFY_DEBUG=true`, which
     CI's `android-preview` job exports. Firebase preview APKs therefore
     exercise the same R8 pass the release AAB does, so a wrong keep rule
@@ -593,7 +615,9 @@ maintainer pointer list.
     it — GPP wires a mapping only on its APK publish path, and we publish
     a bundle. A sideloaded build (Obtainium / Zapstore) has no such
     channel, so a crash report from one stays obfuscated; the mapping for
-    a given release is in the `android-release` run's build output.
+    a given release is uploaded by `android-release` as a
+    `glow-<version>-mapping` artifact, kept 90 days because a stack
+    trace can surface long after the release it came from.
   - **AGP 9 is out (9.0.1, January 2026) and we are still on 8.13.2**,
     because gradle-play-publisher 4.x is what needs AGP 9 and we pin GPP
     3.x. Two things to know when that upgrade happens: AGP 9 *rejects*
