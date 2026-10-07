@@ -482,8 +482,9 @@ jobs:
           platforms: wasm,ios
 
       - name: Select Xcode
-        # Pin Xcode so GitHub's default rotation can't invalidate caches.
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app
+        # Pinned like the other iOS jobs, but to the preview image's Xcode.
+        # 26.3 does not exist here, so the shared pin would fail outright.
+        run: sudo xcode-select -s /Applications/Xcode_27.0.app
 
       - name: Build glow-web dist/
         env:
