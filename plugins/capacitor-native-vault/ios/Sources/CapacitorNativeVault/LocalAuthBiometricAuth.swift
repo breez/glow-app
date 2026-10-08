@@ -135,11 +135,23 @@ private func mapLAError(_ error: Error?) -> NativeVaultErrorCode {
     switch laError {
     case .userCancel, .systemCancel, .appCancel, .userFallback:
         return .userCancelled
-    case .biometryLockout:
+    // The `touchID*` spellings are deprecated aliases holding the same raw
+    // values as their `biometry*` replacements (-8 / -7 / -6), so they are
+    // unreachable: `LAError.Code(rawValue:)` hands back one name per value.
+    // Swift's exhaustiveness check counts them separately regardless, so
+    // each alias rides along in the arm of the case it duplicates. Do not
+    // "tidy" them away — the iOS 27 SDK warns when they are missing.
+    case .biometryLockout, .touchIDLockout:
         return .biometricLockout
-    case .biometryNotEnrolled:
+    case .biometryNotEnrolled, .touchIDNotEnrolled:
         return .biometricNotEnrolled
-    case .biometryNotAvailable, .passcodeNotSet:
+    case .biometryNotAvailable, .touchIDNotAvailable, .passcodeNotSet:
+        return .biometricUnavailable
+    case .companionNotAvailable:
+        // No paired Apple Watch / Mac / Vision nearby. Only the
+        // `*WithCompanion` policies raise this and we evaluate neither,
+        // so this arm is defensive. The factor is unavailable, which is
+        // what BIOMETRIC_UNAVAILABLE already tells the user.
         return .biometricUnavailable
     case .authenticationFailed, .invalidContext, .notInteractive:
         return .unknown
