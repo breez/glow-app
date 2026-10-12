@@ -901,7 +901,8 @@ jobs:
           cd android && ./gradlew :app:publishReleaseBundle --no-daemon
 
       - name: Promote to closed + open testing
-        if: ${{ !inputs.dry_run }}
+        # Off on this test build branch: it ships to the internal track only.
+        if: false
         # The AAB is already uploaded — promoting reuses that same artifact
         # instead of re-uploading it, so the version code stays identical
         # across all three tracks. Both promotes read from `internal`
