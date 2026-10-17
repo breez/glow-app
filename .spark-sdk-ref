@@ -10,4 +10,4 @@
 # @breeztech/breez-sdk-spark version in glow-web/package.json: the
 # native bindings and the WASM SDK must come from the same commit, or
 # the passkey plugin fails to build.
-2c140a5d721f04d21c5ac334fecc3efe7c069943
+ac73f3f9c63717a238e7e0bfb94046cd8da5c2db
