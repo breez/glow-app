@@ -355,9 +355,11 @@ Consequences:
   bump races the ~40-min cold warm and rebuilds the SDK from
   scratch inside the release pipeline. Seconds-cheap when the pin
   didn't change.
-- PR warmers build wasm only (nothing on a PR consumes Android
-  artifacts); full wasm+android / wasm+ios sets are built on main
-  pushes, tags, and dispatches. The macOS warmer reuses the
+- The Linux warmer always builds wasm+android, PRs included: the
+  cache key does not name platforms, so a partial PR save would
+  shadow main's full set and break CodeQL's Android scan. wasm+ios
+  sets are built on main pushes, tags, and dispatches. The macOS
+  warmer reuses the
   Linux-built WASM tgz cross-OS instead of rebuilding it.
 - `.github/workflows/cache-maintenance.yml` deletes closed-PR
   caches (quota hygiene) and touches main's SDK caches Mon+Thu

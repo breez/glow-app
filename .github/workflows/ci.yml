@@ -255,13 +255,11 @@ jobs:
           java-version: '21'
       - uses: ./.github/actions/setup-glow-app
         with:
-          # PR events warm wasm ONLY (~9 min): no PR job consumes the
-          # Android artifacts (`android` is dispatch-only, previews and
-          # releases are tag-gated), and a PR-scope cache dies with the
-          # PR — the ~28-min 4-ABI Android build there was pure waste.
-          # The canonical full set is built where it's consumed: main
-          # pushes (cache warming), tags, and dispatches.
-          platforms: ${{ github.event_name == 'pull_request' && 'wasm' || 'wasm,android' }}
+          # Always the full set: the cache key does not name platforms,
+          # so a wasm-only save on a PR shadows main's full cache for that
+          # PR, and CodeQL's Android scan then cannot find the bindings.
+          # On a hit (the usual case) this costs nothing.
+          platforms: wasm,android
           mode: warmer
 
   # Only fires when an iOS build will consume the xcframework AND the
