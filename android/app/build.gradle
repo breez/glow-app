@@ -91,6 +91,11 @@ android {
             // install side-by-side on the same device.
             applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
+            // Off locally for speed and readable traces. android-preview
+            // sets MINIFY_DEBUG=true so previews run the release R8 pass
+            // and a bad keep rule fails on a tester, not after upload.
+            minifyEnabled System.getenv('MINIFY_DEBUG') == 'true'
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             // On CI a release artifact is signed with the upload key or not
@@ -113,14 +118,22 @@ android {
             } else if (!System.getenv('CI')) {
                 signingConfig signingConfigs.debug
             }
-            minifyEnabled false
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Keep rules for the SDK's JNA bindings are in
+            // proguard-rules.pro. shrinkResources stays off: res/ is 0.6%
+            // of the APK and `splash_logo` resolves by name.
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
             // Embed native-lib symbol tables in the AAB so Play vitals
             // can symbolicate crashes in the Rust SDK libs (Play warns
             // on every upload without them). SYMBOL_TABLE gives
             // function-level stacks without FULL's DWARF size cost.
             ndk {
                 debugSymbolLevel 'SYMBOL_TABLE'
+                // Play splits an AAB per ABI, but the universal APK the
+                // sideload channels serve carries all of them: x86/x86_64
+                // were 49 MB of 85 MB, unusable on a phone. Costs x86
+                // Chromebooks. `debug` stays unfiltered for emulators.
+                abiFilters 'arm64-v8a', 'armeabi-v7a'
             }
         }
     }
