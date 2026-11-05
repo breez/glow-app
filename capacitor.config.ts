@@ -156,6 +156,13 @@ const config: CapacitorConfig = {
       resize: 'native',
       resizeOnFullScreen: true,
     },
+    SystemBars: {
+      // Glow is dark-only. SystemBars re-applies this style on every
+      // configuration change (rotation, a system theme switch), and the
+      // default follows the device theme, which turned the bar icons dark
+      // on Glow's dark canvas whenever a light-mode device rotated.
+      style: 'DARK',
+    },
   },
 };
 
