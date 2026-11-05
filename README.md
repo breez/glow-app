@@ -8,7 +8,7 @@ Built with [Capacitor](https://capacitorjs.com/) to wrap the existing Glow PWA i
 - **Native passkey PRF** — biometric authentication via ASAuthorization (iOS) and CredentialManager (Android), since WebAuthn is unavailable in WebViews
 - **Native secure vault** — wallet seed stored in iOS Keychain / Android Keystore with biometric binding enforced by the OS, not just a JS-side gate. Adding a new Face ID / Touch ID / fingerprint enrollment voids the stored seed automatically
 - **Dedicated unlock screen** — cancelling the biometric prompt lands on a retry/abandon flow instead of dropping the user onto onboarding, where they could accidentally create a new passkey label and orphan the stored wallet
-- **Branded native shell** — app icons, splash screen, launch theme, system bar colors, safe-area-aware layout, and portrait orientation lock on iOS and Android
+- **Branded native shell** — app icons, splash screen, launch theme, system bar colors, safe-area-aware layout, and portrait orientation lock on iOS and on Android phones
 - **Native camera for QR scanning** — CAMERA / NSCameraUsageDescription wired into the existing QR scanner dialog, with image-upload fallback if the user denies the permission
 - **Native share + in-app browser** — log export goes through the system share sheet via `@capacitor/share`, and Buy Bitcoin provider URLs open in Chrome Custom Tabs / SFSafariViewController via `@capacitor/browser` instead of navigating the app's WebView
 - **Soft keyboard and back-button polish** — proper keyboard resize on both platforms, per-field `enterKeyHint` action buttons, form submit retracts the keyboard, and the Android hardware back button dismisses open sheets / drawers / dialogs in LIFO order before falling through to "minimise the app"
