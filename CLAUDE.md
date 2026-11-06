@@ -437,14 +437,10 @@ Two bash scripts at `scripts/ci/` handle the Ad Hoc signing the
 
 ### PR-label gating for iOS
 
-The `ios` job's `if:` expression:
-
-```yaml
-if: >-
-  github.event_name == 'push' ||
-  github.event_name == 'workflow_dispatch' ||
-  contains(github.event.pull_request.labels.*.name, 'run-ios')
-```
+The `ios` job runs on a PR only while the PR carries the `run-ios`
+label. Job gates read labels from the event payload, so `ci.yml` also
+listens for `labeled`: adding the label to an open PR starts the
+build at once, and later pushes re-run it until the label comes off.
 
 Skipped PRs show a "skipped" status, not "failed". Branch
 protection must be configured with "skipped = passing" so

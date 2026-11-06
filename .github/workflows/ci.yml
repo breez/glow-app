@@ -23,6 +23,12 @@ name: CI
 # after the main-push CI run completes.
 on:
   pull_request:
+    # Job gates read labels from the event payload, so `labeled` is what
+    # lets adding `run-ios` to an open PR start the iOS build.
+    # ponytail: any label re-runs the PR jobs, iOS too on a run-ios PR.
+    # Only run-ios is used today; gate on github.event.label.name if
+    # other labels start firing runs.
+    types: [opened, synchronize, reopened, labeled]
     paths-ignore:
       - '**.md'
       - 'docs/**'
