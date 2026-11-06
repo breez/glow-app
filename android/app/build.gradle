@@ -131,7 +131,7 @@ android {
             // on every upload without them). SYMBOL_TABLE gives
             // function-level stacks without FULL's DWARF size cost.
             ndk {
-                debugSymbolLevel 'SYMBOL_TABLE'
+                debugSymbolLevel = 'SYMBOL_TABLE'
                 // Play splits an AAB per ABI, but the universal APK the
                 // sideload channels serve carries all of them: x86/x86_64
                 // were 49 MB of 85 MB, unusable on a phone. Costs x86
