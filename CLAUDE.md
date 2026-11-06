@@ -574,6 +574,39 @@ maintainer pointer list.
   expected certificate at all is itself a failure. Covered by
   `scripts/ci/verify-aab-signature.test.sh` (needs a JDK, runs
   in a couple of seconds, no framework).
+- **R8 (`minifyEnabled true` on `release`)**: rules live in
+  `android/app/proguard-rules.pro`. Play requires an optimized bundle, so
+  this is not discretionary. Full mode is the default, so nothing
+  reflective survives unless a rule names it.
+  - **Do not widen the SDK keep rules** beyond what they already match:
+    the JNA bridge, plus the PRF error class names that glow-web reads
+    out of native error messages. Keeping the binding packages wholesale drops
+    obfuscation back under Play's floor — the commit that narrowed them
+    has the before and after.
+  - Capacitor's own `consumerProguardFiles` covers every plugin class.
+  - `shrinkResources` stays off: the splash drawable is resolved by name
+    from `capacitor.config.ts`, which no static analysis can see.
+  - `debug` minifies only under `MINIFY_DEBUG`, which `android-preview`
+    sets, so previews exercise the release R8 pass before a store upload.
+    The flag also turns `debuggable` off, because AGP runs R8 without
+    renaming or optimization for a debuggable build.
+  - CodeQL's Android build sets `MINIFY_DEBUG` too. It is the only PR
+    check that runs R8, so a rule typo or a class R8 can't resolve fails
+    before merge, not on a release tag.
+  - Play takes the mapping from inside the AAB. Sideloaded builds have no
+    equivalent, so both Android jobs keep it as an artifact.
+  - Stack traces name their mapping: R8 writes `r8-map-id-<hash>` as each
+    class's source file, matching `pg_map_id` at the top of
+    `mapping.txt`. Don't add `-renamesourcefileattribute`, which
+    replaces it with a fixed name.
+  - Moving to AGP 9 means bumping Gradle and gradle-play-publisher in the
+    same change. Don't pre-migrate the optimization DSL on its own.
+- **ABI filtering (`release` only)**: ARM only. Play splits an AAB per
+  ABI, so a store install was never affected, but the universal APK the
+  sideload channels serve carries every one and the x86 variants are dead
+  weight on a phone. The trade is x86 Chromebooks, which Play stops
+  offering the app to. `debug` stays unfiltered so emulators can install
+  it.
 - **Play App Signing**: Google generates the release key
   during first-AAB enrollment. We hold only the upload key.
   Trade-off vs. self-managed release key: easier rotation via

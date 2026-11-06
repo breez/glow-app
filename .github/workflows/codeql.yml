@@ -86,6 +86,11 @@ jobs:
       - name: Gradle assembleDebug
         # No compute-version.sh: versionCode / versionName fall back to
         # defaults in build.gradle, and nothing here ships an artifact.
+        # MINIFY_DEBUG runs the release R8 pass. No other PR check does,
+        # so a rule typo or a class R8 can't resolve fails here, not on
+        # a release tag.
+        env:
+          MINIFY_DEBUG: 'true'
         run: cd android && ./gradlew :app:assembleDebug --no-daemon
 
       - name: Perform CodeQL analysis
