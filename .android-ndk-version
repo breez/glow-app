@@ -3,7 +3,9 @@
 #   .github/actions/setup-glow-app/action.yml   (sdkmanager install, env, cache keys)
 #   .github/workflows/ci.yml                    (preflight probe key)
 #   .github/workflows/cache-maintenance.yml     (keep-alive touch keys)
-# All four construct SDK artifact cache keys that must match verbatim.
+#   android/app/build.gradle                    (ndkVersion: AGP strips the
+#                                                SDK's native libraries with it)
+# The workflow readers build SDK artifact cache keys that must match verbatim.
 # r28+ required: its libc++_shared.so prebuilt is 16 KB page-aligned
 # (Play mandate, issue #86); r26/r27 prebuilts are 4 KB-aligned.
 # One version per line; # lines are comments.
