@@ -595,6 +595,10 @@ maintainer pointer list.
     before merge, not on a release tag.
   - Play takes the mapping from inside the AAB. Sideloaded builds have no
     equivalent, so both Android jobs keep it as an artifact.
+  - Stack traces name their mapping: R8 writes `r8-map-id-<hash>` as each
+    class's source file, matching `pg_map_id` at the top of
+    `mapping.txt`. Don't add `-renamesourcefileattribute`, which
+    replaces it with a fixed name.
   - Moving to AGP 9 means bumping Gradle and gradle-play-publisher in the
     same change. Don't pre-migrate the optimization DSL on its own.
 - **ABI filtering (`release` only)**: ARM only. Play splits an AAB per

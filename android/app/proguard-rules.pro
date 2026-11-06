@@ -23,7 +23,3 @@
 # JNA's desktop AWT helpers reference java.awt.*, absent on Android.
 # R8 fails the build without this.
 -dontwarn java.awt.**
-
-# Readable traces in Play vitals. AGP embeds the mapping in the AAB.
--keepattributes SourceFile,LineNumberTable
--renamesourcefileattribute SourceFile
