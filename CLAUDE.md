@@ -238,7 +238,7 @@ both patches together (both are in the dependabot ignore list).
     launch-time `--safe-area-inset-*` CSS injection self-corrects
     after the app-open transition.
 
-- **`patches/@capacitor+keyboard+8.0.5.patch`**: one-line change. The
+- **`patches/@capacitor+keyboard+8.0.6.patch`**: one-line change. The
   decor-level `WindowInsetsAnimationCompat.Callback` (which fires the
   plugin's `keyboardWillShow` / `keyboardDidShow` JS events) uses
   `DISPATCH_MODE_CONTINUE_ON_SUBTREE` instead of `DISPATCH_MODE_STOP`,
@@ -496,6 +496,10 @@ Phase 4B is structured to minimize macOS usage within the
 Breez-org's plan quota:
 
 - iOS PRs are **label-gated**.
+- The unsigned `ios` check runs on the `xcode-27` preview label —
+  same spec and price as `macos-15`, and it throws its build away, so
+  a preview image that breaks or queues costs only that check. The
+  preview and release jobs stay on `macos-15` until it is GA.
 - iOS preview runs only on **preview-* tags** (and manual
   dispatch), not on every main push.
 - Android + web run on ubuntu (1x).
@@ -614,7 +618,7 @@ maintainer pointer list.
   becomes known after first enrollment upload (must then be
   appended to `keys.bt.webauthn` assetlinks under
   `technology.breez.glow.dev`).
-- `gradle-play-publisher` 3.12.1
+- `gradle-play-publisher` 3.13.0
   (`com.github.triplet.play` plugin in
   `android/app/build.gradle`) handles CI-driven Play uploads.
   Pinned to 3.x — GPP 4.0.0 needs AGP 9, we ship AGP 8.
