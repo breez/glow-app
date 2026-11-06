@@ -92,9 +92,12 @@ android {
             applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
             // Off locally for speed and readable traces. android-preview
-            // sets MINIFY_DEBUG=true so previews run the release R8 pass
-            // and a bad keep rule fails on a tester, not after upload.
-            minifyEnabled System.getenv('MINIFY_DEBUG') == 'true'
+            // sets MINIFY_DEBUG=true to run the release R8 pass, which
+            // needs a non-debuggable build: for a debuggable one AGP runs
+            // R8 without renaming or optimization.
+            def minifyPreview = System.getenv('MINIFY_DEBUG') == 'true'
+            minifyEnabled minifyPreview
+            debuggable !minifyPreview
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {

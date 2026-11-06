@@ -698,7 +698,8 @@ jobs:
       - name: Gradle assembleDebug
         # Runs the release R8 pass over the preview APK, so a missing keep
         # rule fails on a tester rather than after a Play upload. Still the
-        # debug keystore + `.dev` id, so side-by-side install is unchanged.
+        # debug keystore + `.dev` id, so side-by-side install is unchanged,
+        # but the APK isn't debuggable, so chrome://inspect can't attach.
         env:
           MINIFY_DEBUG: 'true'
         run: cd android && ./gradlew :app:assembleDebug --no-daemon

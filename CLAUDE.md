@@ -587,6 +587,8 @@ maintainer pointer list.
     from `capacitor.config.ts`, which no static analysis can see.
   - `debug` minifies only under `MINIFY_DEBUG`, which `android-preview`
     sets, so previews exercise the release R8 pass before a store upload.
+    The flag also turns `debuggable` off, because AGP runs R8 without
+    renaming or optimization for a debuggable build.
   - Play takes the mapping from inside the AAB. Sideloaded builds have no
     equivalent, so both Android jobs keep it as an artifact.
   - Moving to AGP 9 means bumping Gradle and gradle-play-publisher in the
