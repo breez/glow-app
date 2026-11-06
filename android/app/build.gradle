@@ -4,6 +4,13 @@ apply plugin: 'com.github.triplet.play'
 android {
     namespace = "technology.breez.glow"
     compileSdk = rootProject.ext.compileSdkVersion
+    // AGP strips the SDK's native libraries and extracts their symbols with
+    // this NDK. Unpinned, it looks for its own default, which CI runners
+    // don't ship, and packages the libraries unstripped. Same pin the SDK
+    // builds with.
+    ndkVersion = rootProject.file('../.android-ndk-version').readLines()
+            .collect { it.trim() }
+            .find { it && !it.startsWith('#') }
     defaultConfig {
         // Base applicationId — `release` buildType ships this unchanged
         // as `technology.breez.glow`. `debug` buildType appends `.dev`

@@ -23,8 +23,10 @@ inputs:
                    to populate caches.
 
       "consumer" = cache-restore only. Does NOT install the build
-                   toolchain and does NOT invoke `make sdk-*` on
-                   miss — a miss is reported as a warning but the
+                   toolchain, apart from the pinned NDK when
+                   platforms include android (AGP strips native
+                   libraries with it), and does NOT invoke
+                   `make sdk-*` on miss — a miss is reported as a warning but the
                    job continues (the downstream step consuming the
                    cached artifacts will fail fast if actually
                    missing, which is the correct loud-fail mode).
@@ -338,8 +340,15 @@ runs:
         sudo docker image prune --all --force >/dev/null 2>&1 || true
         df -h / | tail -1
 
+    # Consumers that build the app need the pinned NDK as well:
+    # android/app/build.gradle sets ndkVersion from .android-ndk-version,
+    # and AGP strips the SDK's native libraries and extracts their symbols
+    # with it. Without it AGP falls back to its own default NDK, which the
+    # runner image lacks, and packages the libraries unstripped.
     - name: Setup Android SDK + NDK (if android requested)
-      if: inputs.mode == 'warmer' && steps.cache-hit.outputs.hit != 'true' && contains(inputs.platforms, 'android')
+      if: >-
+        contains(inputs.platforms, 'android') &&
+        (inputs.mode == 'consumer' || steps.cache-hit.outputs.hit != 'true')
       uses: android-actions/setup-android@v3
       with:
         cmdline-tools-version: 11076708
