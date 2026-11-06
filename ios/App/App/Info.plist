@@ -87,6 +87,28 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- One window scene, built from Main.storyboard and run by
+	     SceneDelegate (AppDelegate.swift). An app built with the iOS 27
+	     SDK fails to launch without the UIScene life cycle. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+					<key>UISceneStoryboardFile</key>
+					<string>Main</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
@@ -99,7 +121,13 @@
 	     designed and tested in portrait; landscape introduces
 	     responsive-layout issues (balance display collision,
 	     bottom-bar wrapping, QR scanner crop, etc.) that aren't
-	     worth addressing for a phone-first wallet app. -->
+	     worth addressing for a phone-first wallet app.
+
+	     Built with the iOS 27 SDK, iPhone Duo's inner display ignores
+	     this lock by design, so Glow rotates there when unfolded, while
+	     the cover screen keeps it, matching what MainActivity does for
+	     Android foldables. UIRequiresFullScreen would restore the lock
+	     but scales the app instead. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
