@@ -154,7 +154,21 @@ navigate the code.
   smallest width, so tablets and foldables rotate on every version.
   Keep `android:screenOrientation` out of `AndroidManifest.xml`:
   Android 16 ignores it on large screens for apps targeting API 36,
-  and Play flags it as a large-screen restriction.
+  and Play flags it as a large-screen restriction. On iPhone Duo an
+  iOS 27 SDK build ignores the iOS lock on the inner display by
+  design, so Glow rotates there when unfolded while the cover screen
+  stays portrait, the same split Android foldables get. Don't add
+  `UIRequiresFullScreen` to force portrait: the app scales instead.
+- **UIScene life cycle** — an app built with the iOS 27 SDK fails to
+  launch without it. `SceneDelegate` (in `AppDelegate.swift`) hands
+  links to Capacitor's `SceneDelegateProxy`, which needs
+  `@capacitor/ios` 8.5 or later, and the window comes from
+  `Main.storyboard` through the scene manifest in `Info.plist`. Both
+  in-house plugins pin `capacitor-swift-pm` to the exact
+  `@capacitor/ios` version, so bump the three together.
+  `@capacitor/core` follows iOS (its peer range) while
+  `@capacitor/android` stays on the patched 8.3.0, so `cap sync
+  android` warns about the version mismatch; that warning is expected.
 
 ### Capacitor plugins
 
