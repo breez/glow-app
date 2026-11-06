@@ -590,6 +590,9 @@ maintainer pointer list.
     sets, so previews exercise the release R8 pass before a store upload.
     The flag also turns `debuggable` off, because AGP runs R8 without
     renaming or optimization for a debuggable build.
+  - CodeQL's Android build sets `MINIFY_DEBUG` too. It is the only PR
+    check that runs R8, so a rule typo or a class R8 can't resolve fails
+    before merge, not on a release tag.
   - Play takes the mapping from inside the AAB. Sideloaded builds have no
     equivalent, so both Android jobs keep it as an artifact.
   - Moving to AGP 9 means bumping Gradle and gradle-play-publisher in the

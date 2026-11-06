@@ -92,9 +92,9 @@ android {
             applicationIdSuffix ".dev"
             signingConfig signingConfigs.debug
             // Off locally for speed and readable traces. android-preview
-            // sets MINIFY_DEBUG=true to run the release R8 pass, which
-            // needs a non-debuggable build: for a debuggable one AGP runs
-            // R8 without renaming or optimization.
+            // and CodeQL set MINIFY_DEBUG=true to run the release R8 pass,
+            // which needs a non-debuggable build: for a debuggable one AGP
+            // runs R8 without renaming or optimization.
             def minifyPreview = System.getenv('MINIFY_DEBUG') == 'true'
             minifyEnabled minifyPreview
             debuggable !minifyPreview
