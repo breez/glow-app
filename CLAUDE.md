@@ -148,9 +148,13 @@ navigate the code.
   `ios/App/App/Base.lproj/LaunchScreen.storyboard` hard-codes the
   background to `#0a0a0f` instead of `systemBackgroundColor`, so
   light-mode iOS devices don't flash white during launch.
-- **Orientation lock** — portrait-only on both platforms:
-  `android:screenOrientation="portrait"` in `AndroidManifest.xml`,
-  `UISupportedInterfaceOrientations` in `Info.plist`.
+- **Orientation lock** — portrait on phones. iOS locks iPhone and
+  iPad through `UISupportedInterfaceOrientations` in `Info.plist`.
+  Android locks at runtime in `MainActivity`, and only below 600dp
+  smallest width, so tablets and foldables rotate on every version.
+  Keep `android:screenOrientation` out of `AndroidManifest.xml`:
+  Android 16 ignores it on large screens for apps targeting API 36,
+  and Play flags it as a large-screen restriction.
 
 ### Capacitor plugins
 
