@@ -578,8 +578,9 @@ maintainer pointer list.
   `android/app/proguard-rules.pro`. Play requires an optimized bundle, so
   this is not discretionary. Full mode is the default, so nothing
   reflective survives unless a rule names it.
-  - **Do not widen the SDK keep rules** beyond the JNA bridge they
-    already match. Keeping the binding packages wholesale drops
+  - **Do not widen the SDK keep rules** beyond what they already match:
+    the JNA bridge, plus the PRF error class names that glow-web reads
+    out of native error messages. Keeping the binding packages wholesale drops
     obfuscation back under Play's floor — the commit that narrowed them
     has the before and after.
   - Capacitor's own `consumerProguardFiles` covers every plugin class.

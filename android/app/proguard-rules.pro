@@ -15,6 +15,11 @@
 -keep class com.sun.jna.** { *; }
 -keep class * implements com.sun.jna.** { *; }
 
+# glow-web picks its passkey error copy from the PRF error's class name,
+# which reaches it only inside the native error message
+# (`v1=breez_sdk_spark.PrfProviderException$UserTimedOut: ...`).
+-keepnames class breez_sdk_spark.PrfProviderException*
+
 # JNA's desktop AWT helpers reference java.awt.*, absent on Android.
 # R8 fails the build without this.
 -dontwarn java.awt.**
