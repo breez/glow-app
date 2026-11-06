@@ -8,7 +8,7 @@ let package = Package(
         .library(name: "CapacitorNativeVault", targets: ["CapacitorNativeVault"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.3.0"),
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.6.0"),
     ],
     targets: [
         .target(

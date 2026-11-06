@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "CapacitorPasskeyPrf", targets: ["CapacitorPasskeyPrf"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.3.0"),
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.6.0"),
         .package(path: sdkPath),
     ],
     targets: [
