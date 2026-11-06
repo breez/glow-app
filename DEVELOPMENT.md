@@ -668,7 +668,7 @@ After the first signed AAB exists:
    passkey smoke-testing.
 
 After enrollment, all subsequent uploads are CI-driven via
-`gradle-play-publisher` 3.12.1 (pinned to the last 3.x release
+`gradle-play-publisher` 3.13.0 (pinned to the last 3.x release
 because GPP 4.0.0 requires Android Gradle Plugin 9 and we
 ship AGP 8).
 

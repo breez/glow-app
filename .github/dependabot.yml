@@ -60,7 +60,7 @@ updates:
       # until the patch is re-authored against the refactored
       # SystemBars.java.
       - dependency-name: "@capacitor/android"
-      # Patched via patches/@capacitor+keyboard+8.0.5.patch (one-line
+      # Patched via patches/@capacitor+keyboard+8.0.6.patch (one-line
       # dispatch-mode change that lets the SystemBars patch see IME
       # animation callbacks). Bumping without re-authoring the patch
       # silently breaks the Android 15+ keyboard-synced resize (#126).
@@ -209,7 +209,7 @@ updates:
           - patch
     ignore:
       # AGP + Gradle wrapper move together. AGP 9 requires Gradle 9,
-      # and our gradle-play-publisher 3.12.1 works only on AGP 8.
+      # and our gradle-play-publisher 3.13.0 works only on AGP 8.
       # Coordinated bump plan: pin AGP 9 + wrapper 9 + GPP 4 in the
       # same PR. Dependabot's individual bumps are destructive here.
       - dependency-name: "com.android.tools.build:gradle"
